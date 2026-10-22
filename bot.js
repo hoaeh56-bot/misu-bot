@@ -27,13 +27,13 @@ function addBalance(userId, amount) {
   saveBalances(balances);
 }
 
-// Загрузка ивента (просто для сброса)
 function loadEvent() {
   if (!fs.existsSync(EVENT_FILE)) return { totalPoints: 0 };
   try { return JSON.parse(fs.readFileSync(EVENT_FILE, 'utf8')); } catch (e) { return { totalPoints: 0 }; }
 }
 function saveEvent(data) { fs.writeFileSync(EVENT_FILE, JSON.stringify(data, null, 2)); }
 
+// ===== СЕРВЕР =====
 const app = express();
 app.use(cors()); 
 app.use(express.json());
@@ -65,8 +65,30 @@ app.post('/api/withdraw', async (req, res) => {
   }
 });
 
-app.listen(process.env.PORT || 3000, () => console.log('Сервер для заявок запущен!'));
+app.listen(process.env.PORT || 3000, () => {
+  console.log('✅ Сервер для заявок запущен!');
+  // Запускаем бота ТОЛЬКО после того, как сервер поднялся
+  startBot();
+});
 
+// ===== УМНЫЙ ЗАПУСК БОТА =====
+async function startBot() {
+  try {
+    // Сначала удаляем старые вебхуки (часто из-за них 409)
+    await bot.telegram.deleteWebhook({ drop_pending_updates: true });
+    console.log('Вебхуки очищены, запускаем бота...');
+    
+    // Запускаем бота
+    await bot.launch({ dropPendingUpdates: true });
+    console.log('✅ Бот запущен!');
+  } catch (err) {
+    console.log(`⚠️ Ошибка при запуске: ${err.message}. Перезапуск через 5 секунд...`);
+    // Если упал (409 Conflict), ждем 5 секунд и пробуем снова
+    setTimeout(startBot, 5000);
+  }
+}
+
+// ===== ЛОГИКА БОТА =====
 const waitingForAmount = new Set();
 
 bot.start((ctx) => {
@@ -90,7 +112,103 @@ bot.start((ctx) => {
   });
 });
 
-// Админ-панель
+bot.action('deposit_start', (ctx) => {
+  ctx.answerCbQuery();
+  waitingForAmount.add(ctx.from.id);
+  ctx.reply('Введите сумму в звездах (только цифры, например: 100):');
+});
+
+bot.on('text', async (ctx) => {
+  const userId = ctx.from.id;
+  const username = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
+  const text = ctx.message.text.trim();
+
+  if (text === '/start') return;
+
+  if (waitingForAmount.has(userId)) {
+    const amount = parseInt(text);
+    
+    if (isNaN(amount) || amount < 1) {
+      return ctx.reply('Введите корректную сумму цифрами (например, 100).');
+    }
+
+    const adminMsg = `💰 **ЗАЯВКА НА ПОПОЛНЕНИЕ**\n\n👤 Игрок: ${username}\n🆔 ID: ${userId}\n⭐ Сумма: ${amount} звезд`;
+    
+    const replyMarkup = {
+      inline_keyboard: [[
+        { text: '✅ Начислить', callback_data: `approve_dep_${userId}_${amount}` },
+        { text: '❌ Отклонить', callback_data: `reject_dep_${userId}` }
+      ]]
+    };
+
+    try { await bot.telegram.sendMessage(ADMIN_CHAT_ID, adminMsg, { parse_mode: 'Markdown', reply_markup: replyMarkup }); } catch (e) {}
+    try { await bot.telegram.sendMessage(ADMIN_IDS[0], adminMsg, { parse_mode: 'Markdown', reply_markup: replyMarkup }); } catch (e) {}
+
+    ctx.reply(`✅ Заявка на ${amount} ⭐ создана!\n\n👉 Переведи ${amount} звезд на аккаунт @misurade.\nПосле перевода админ начислит тебе баланс.`);
+    waitingForAmount.delete(userId);
+    return;
+  }
+  ctx.reply('Нажми /start, чтобы открыть меню.');
+});
+
+// Обработка кнопок
+bot.action(/approve_dep_(\d+)_(\d+)/, async (ctx) => {
+  const adminId = ctx.from.id.toString();
+  const targetUserId = ctx.match[1];
+  const amount = parseInt(ctx.match[2]);
+
+  if (!ADMIN_IDS.includes(adminId)) {
+    return ctx.answerCbQuery('У вас нет прав.', { show_alert: true });
+  }
+
+  addBalance(targetUserId, amount);
+
+  ctx.answerCbQuery('Начислено!');
+  ctx.editMessageText(`✅ Пополнение на ${amount} ⭐ для игрока ${targetUserId} ОДОБРЕНО.\n\nБаланс обновлен в базе.`);
+  
+  try { await bot.telegram.sendMessage(targetUserId, `✅ Ваше пополнение на ${amount} ⭐ одобрено! Перезайдите в игру, чтобы увидеть баланс.`); } catch (e) {}
+});
+
+bot.action(/reject_dep_(\d+)/, async (ctx) => {
+  const adminId = ctx.from.id.toString();
+  const targetUserId = ctx.match[1];
+
+  if (!ADMIN_IDS.includes(adminId)) {
+    return ctx.answerCbQuery('У вас нет прав.', { show_alert: true });
+  }
+
+  ctx.answerCbQuery('Отклонено!');
+  ctx.editMessageText(`❌ Заявка на пополнение для игрока ${targetUserId} ОТКЛОНЕНА.`);
+  try { await bot.telegram.sendMessage(targetUserId, `❌ Ваша заявка на пополнение отклонена.`); } catch (e) {}
+});
+
+bot.action(/approve_wd_(\d+)/, async (ctx) => {
+  const adminId = ctx.from.id.toString();
+  const targetUserId = ctx.match[1];
+
+  if (!ADMIN_IDS.includes(adminId)) {
+    return ctx.answerCbQuery('У вас нет прав.', { show_alert: true });
+  }
+
+  ctx.answerCbQuery('Выдано!');
+  ctx.editMessageText(`✅ Вывод для игрока ${targetUserId} ОДОБРЕН.`);
+  try { await bot.telegram.sendMessage(targetUserId, `✅ Ваша заявка на вывод одобрена! Админ свяжется с вами.`); } catch (e) {}
+});
+
+bot.action(/reject_wd_(\d+)/, async (ctx) => {
+  const adminId = ctx.from.id.toString();
+  const targetUserId = ctx.match[1];
+
+  if (!ADMIN_IDS.includes(adminId)) {
+    return ctx.answerCbQuery('У вас нет прав.', { show_alert: true });
+  }
+
+  ctx.answerCbQuery('Отклонено!');
+  ctx.editMessageText(`❌ Заявка на вывод для игрока ${targetUserId} ОТКЛОНЕНА.`);
+  try { await bot.telegram.sendMessage(targetUserId, `❌ Ваша заявка на вывод отклонена.`); } catch (e) {}
+});
+
+// Админка
 bot.action('admin_panel', (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id.toString())) {
     return ctx.answerCbQuery('Нет прав', { show_alert: true });
@@ -118,5 +236,3 @@ bot.action('admin_reset_event', async (ctx) => {
   ctx.answerCbQuery('Ивент сброшен!');
   ctx.editMessageText('✅ Ивент успешно обнулен.');
 });
-
-// ... (продолжение логики пополнения и вывода как в прошлом файле)
