@@ -2,7 +2,6 @@ const { Telegraf } = require('telegraf');
 const express = require('express');
 const cors = require('cors');
 
-// Твой новый токен
 const bot = new Telegraf('1780243237:1w2CHS4zqtHz5dJ5QJEBdwHKTNEwjWPiUQY', {
   telegram: { apiRoot: 'http://2.26.51.20:8088/bot' }
 });
@@ -10,7 +9,7 @@ const bot = new Telegraf('1780243237:1w2CHS4zqtHz5dJ5QJEBdwHKTNEwjWPiUQY', {
 const ADMIN_CHAT_ID = '-100243'; 
 const SITE_URL = 'https://misu-site.vercel.app/'; 
 
-// ===== СЕРВЕР ДЛЯ ПРИЕМА ЗАЯВОК =====
+// ===== СЕРВЕР =====
 const app = express();
 app.use(cors()); 
 app.use(express.json());
@@ -31,7 +30,6 @@ app.post('/api/deposit', async (req, res) => {
     });
     res.status(200).send('OK');
   } catch (e) {
-    console.error(e);
     res.status(500).send('Error');
   }
 });
@@ -52,13 +50,22 @@ app.post('/api/withdraw', async (req, res) => {
     });
     res.status(200).send('OK');
   } catch (e) {
-    console.error(e);
     res.status(500).send('Error');
   }
 });
 
-app.listen(process.env.PORT || 3000, () => {
+// Запускаем сервер, а затем бота
+const server = app.listen(process.env.PORT || 3000, () => {
   console.log('Сервер для заявок запущен!');
+  
+  // Небольшая задержка перед запуском бота, чтобы Render не дублировал процесс
+  setTimeout(() => {
+    bot.launch({ dropPendingUpdates: true }).then(() => {
+      console.log('Бот запущен!');
+    }).catch(err => {
+      console.error('Ошибка запуска бота:', err.message);
+    });
+  }, 3000); // Ждем 3 секунды
 });
 
 // ===== ЛОГИКА БОТА =====
@@ -113,8 +120,4 @@ bot.action(/reject_wd_(\d+)/, async (ctx) => {
   ctx.answerCbQuery('Отклонено!');
   ctx.editMessageText(`❌ Заявка на вывод для игрока ${targetUserId} ОТКЛОНЕНА.`);
   try { await bot.telegram.sendMessage(targetUserId, `❌ Ваша заявка на вывод отклонена.`); } catch (e) {}
-});
-
-// Запуск
-bot.launch();
-console.log('Бот запущен!');
+}); 
