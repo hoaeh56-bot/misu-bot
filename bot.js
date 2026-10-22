@@ -2,7 +2,8 @@ const { Telegraf } = require('telegraf');
 const fs = require('fs');
 const path = require('path');
 
-const bot = new Telegraf('1780243247:BLnX3Vx_8memKeCIAc1wldxkGl5mlAHFMAG', {
+// Твой новый токен
+const bot = new Telegraf('1780243247:iedfuHV02eIkEj4X7v_HCRo31a7SMScrN9x', {
   telegram: { apiRoot: 'http://2.26.51.20:8088/bot' }
 });
 
