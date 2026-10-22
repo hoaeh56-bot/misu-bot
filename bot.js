@@ -12,7 +12,6 @@ const ADMIN_CHAT_ID = '-100243';
 const ADMIN_IDS = ['1780243206']; 
 const SITE_URL = 'https://misu-site.vercel.app/'; 
 
-// ===== ХРАНИЛИЩЕ БАЛАНСОВ =====
 const BALANCE_FILE = path.join(__dirname, 'balances.json');
 
 function loadBalances() {
@@ -32,7 +31,6 @@ function addBalance(userId, amount) {
   saveBalances(balances);
 }
 
-// ===== ВЕБ-СЕРВЕР =====
 const app = express();
 app.use(cors()); 
 app.use(express.json());
@@ -66,7 +64,6 @@ app.post('/api/withdraw', async (req, res) => {
 
 app.listen(process.env.PORT || 3000, () => console.log('Сервер для заявок запущен!'));
 
-// ===== ЛОГИКА БОТА =====
 const waitingForAmount = new Set();
 
 bot.start((ctx) => {
@@ -123,7 +120,6 @@ bot.on('text', async (ctx) => {
   ctx.reply('Нажми /start, чтобы открыть меню.');
 });
 
-// ===== НАЧИСЛЕНИЕ =====
 bot.action(/approve_dep_(\d+)_(\d+)/, async (ctx) => {
   const adminId = ctx.from.id.toString();
   const targetUserId = ctx.match[1];
@@ -154,7 +150,6 @@ bot.action(/reject_dep_(\d+)/, async (ctx) => {
   try { await bot.telegram.sendMessage(targetUserId, `❌ Ваша заявка на пополнение отклонена.`); } catch (e) {}
 });
 
-// ===== ВЫВОД =====
 bot.action(/approve_wd_(\d+)/, async (ctx) => {
   const adminId = ctx.from.id.toString();
   const targetUserId = ctx.match[1];
@@ -181,7 +176,6 @@ bot.action(/reject_wd_(\d+)/, async (ctx) => {
   try { await bot.telegram.sendMessage(targetUserId, `❌ Ваша заявка на вывод отклонена.`); } catch (e) {}
 });
 
-// ===== ЗАЩИТА ОТ ВЫЛЕТОВ (409) =====
 bot.catch((err, ctx) => {
   if (err.message.includes('409')) {
     console.log('Ожидание закрытия старой сессии (409 Conflict)...');
@@ -190,7 +184,6 @@ bot.catch((err, ctx) => {
   }
 });
 
-// Переподключение при ошибке запуска
 bot.launch().catch(err => {
   console.log('Ошибка при запуске, перезапуск через 5 сек...');
   setTimeout(() => {
