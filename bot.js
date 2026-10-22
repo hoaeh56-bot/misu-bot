@@ -15,6 +15,7 @@ const SITE_URL = 'https://misu-site.vercel.app/';
 const BALANCE_FILE = path.join(__dirname, 'balances.json');
 const EVENT_FILE = path.join(__dirname, 'event.json');
 
+// Загрузка/сохранение балансов
 function loadBalances() {
   if (!fs.existsSync(BALANCE_FILE)) return {};
   try { return JSON.parse(fs.readFileSync(BALANCE_FILE, 'utf8')); } catch (e) { return {}; }
@@ -26,14 +27,18 @@ function addBalance(userId, amount) {
   balances[userId] += amount;
   saveBalances(balances);
 }
+function resetAllBalances() {
+  saveBalances({});
+}
 
+// Загрузка/сохранение ивента
 function loadEvent() {
   if (!fs.existsSync(EVENT_FILE)) return { totalPoints: 0 };
   try { return JSON.parse(fs.readFileSync(EVENT_FILE, 'utf8')); } catch (e) { return { totalPoints: 0 }; }
 }
 function saveEvent(data) { fs.writeFileSync(EVENT_FILE, JSON.stringify(data, null, 2)); }
 
-// ===== СЕРВЕР =====
+// ===== ВЕБ-СЕРВЕР =====
 const app = express();
 app.use(cors()); 
 app.use(express.json());
@@ -42,6 +47,12 @@ app.get('/api/get_balance/:userId', (req, res) => {
   const balances = loadBalances();
   const userId = req.params.userId;
   res.json({ balance: balances[userId] || 0 });
+});
+
+app.post('/api/admin/reset_all', async (req, res) => {
+  resetAllBalances();
+  try { fs.unlinkSync(EVENT_FILE); } catch(e) {}
+  res.status(200).send('OK');
 });
 
 app.post('/api/withdraw', async (req, res) => {
@@ -67,23 +78,17 @@ app.post('/api/withdraw', async (req, res) => {
 
 app.listen(process.env.PORT || 3000, () => {
   console.log('✅ Сервер для заявок запущен!');
-  // Запускаем бота ТОЛЬКО после того, как сервер поднялся
   startBot();
 });
 
 // ===== УМНЫЙ ЗАПУСК БОТА =====
 async function startBot() {
   try {
-    // Сначала удаляем старые вебхуки (часто из-за них 409)
     await bot.telegram.deleteWebhook({ drop_pending_updates: true });
-    console.log('Вебхуки очищены, запускаем бота...');
-    
-    // Запускаем бота
     await bot.launch({ dropPendingUpdates: true });
     console.log('✅ Бот запущен!');
   } catch (err) {
     console.log(`⚠️ Ошибка при запуске: ${err.message}. Перезапуск через 5 секунд...`);
-    // Если упал (409 Conflict), ждем 5 секунд и пробуем снова
     setTimeout(startBot, 5000);
   }
 }
@@ -151,7 +156,7 @@ bot.on('text', async (ctx) => {
   ctx.reply('Нажми /start, чтобы открыть меню.');
 });
 
-// Обработка кнопок
+// ===== НАЧИСЛЕНИЕ =====
 bot.action(/approve_dep_(\d+)_(\d+)/, async (ctx) => {
   const adminId = ctx.from.id.toString();
   const targetUserId = ctx.match[1];
@@ -164,9 +169,9 @@ bot.action(/approve_dep_(\d+)_(\d+)/, async (ctx) => {
   addBalance(targetUserId, amount);
 
   ctx.answerCbQuery('Начислено!');
-  ctx.editMessageText(`✅ Пополнение на ${amount} ⭐ для игрока ${targetUserId} ОДОБРЕНО.\n\nБаланс обновлен в базе.`);
+  ctx.editMessageText(`✅ Пополнение на ${amount} ⭐ для игрока ${targetUserId} ОДОБРЕНО.`);
   
-  try { await bot.telegram.sendMessage(targetUserId, `✅ Ваше пополнение на ${amount} ⭐ одобрено! Перезайдите в игру, чтобы увидеть баланс.`); } catch (e) {}
+  try { await bot.telegram.sendMessage(targetUserId, `✅ Ваше пополнение на ${amount} ⭐ одобрено! Перезайдите в игру.`); } catch (e) {}
 });
 
 bot.action(/reject_dep_(\d+)/, async (ctx) => {
@@ -182,6 +187,7 @@ bot.action(/reject_dep_(\d+)/, async (ctx) => {
   try { await bot.telegram.sendMessage(targetUserId, `❌ Ваша заявка на пополнение отклонена.`); } catch (e) {}
 });
 
+// ===== ВЫВОД =====
 bot.action(/approve_wd_(\d+)/, async (ctx) => {
   const adminId = ctx.from.id.toString();
   const targetUserId = ctx.match[1];
@@ -192,7 +198,7 @@ bot.action(/approve_wd_(\d+)/, async (ctx) => {
 
   ctx.answerCbQuery('Выдано!');
   ctx.editMessageText(`✅ Вывод для игрока ${targetUserId} ОДОБРЕН.`);
-  try { await bot.telegram.sendMessage(targetUserId, `✅ Ваша заявка на вывод одобрена! Админ свяжется с вами.`); } catch (e) {}
+  try { await bot.telegram.sendMessage(targetUserId, `✅ Ваша заявка на вывод одобрена!`); } catch (e) {}
 });
 
 bot.action(/reject_wd_(\d+)/, async (ctx) => {
@@ -208,7 +214,7 @@ bot.action(/reject_wd_(\d+)/, async (ctx) => {
   try { await bot.telegram.sendMessage(targetUserId, `❌ Ваша заявка на вывод отклонена.`); } catch (e) {}
 });
 
-// Админка
+// ===== АДМИН-ПАНЕЛЬ =====
 bot.action('admin_panel', (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id.toString())) {
     return ctx.answerCbQuery('Нет прав', { show_alert: true });
@@ -216,6 +222,7 @@ bot.action('admin_panel', (ctx) => {
   ctx.editMessageText('🛠 Админ-панель\nВыберите действие:', {
     reply_markup: {
       inline_keyboard: [
+        [{ text: '💸 Обнулить всем звёзды', callback_data: 'admin_reset_balances' }],
         [{ text: '🔄 Обнулить ивент (Сброс)', callback_data: 'admin_reset_event' }],
         [{ text: '🔙 Назад', callback_data: 'admin_back' }]
       ]
@@ -228,6 +235,17 @@ bot.action('admin_back', (ctx) => {
   bot.start(ctx);
 });
 
+// ОБНУЛЕНИЕ БАЛАНСОВ
+bot.action('admin_reset_balances', async (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id.toString())) {
+    return ctx.answerCbQuery('Нет прав', { show_alert: true });
+  }
+  resetAllBalances();
+  ctx.answerCbQuery('Балансы обнулены!');
+  ctx.editMessageText('✅ Все балансы игроков обнулены до 0 ⭐.');
+});
+
+// ОБНУЛЕНИЕ ИВЕНТА
 bot.action('admin_reset_event', async (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id.toString())) {
     return ctx.answerCbQuery('Нет прав', { show_alert: true });
