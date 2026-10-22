@@ -7,9 +7,10 @@ const bot = new Telegraf('1780243237:1w2CHS4zqtHz5dJ5QJEBdwHKTNEwjWPiUQY', {
 });
 
 const ADMIN_CHAT_ID = '-100243'; 
-const ADMIN_IDS = ['1780243206']; // Твой ID (личка)
+const ADMIN_IDS = ['1780243206']; // Твой ID для ЛС
 const SITE_URL = 'https://misu-site.vercel.app/'; 
 
+// ===== СЕРВЕР =====
 const app = express();
 app.use(cors()); 
 app.use(express.json());
@@ -17,11 +18,13 @@ app.listen(process.env.PORT || 3000, () => console.log('Сервер запущ�
 
 const waitingForAmount = new Set();
 
+// ===== ЛОГИКА БОТА =====
 bot.start((ctx) => {
   const userId = ctx.from.id.toString();
   const username = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
   const gameUrl = `${SITE_URL}?tg_id=${userId}&name=${encodeURIComponent(username)}`;
 
+  // Отправляем меню с кнопками
   ctx.reply(`Добро пожаловать, ${username}!\nТвой ID: ${userId}\n\nВыбери действие:`, {
     reply_markup: {
       inline_keyboard: [
@@ -32,12 +35,14 @@ bot.start((ctx) => {
   });
 });
 
+// Кнопка пополнения
 bot.action('deposit_start', (ctx) => {
   ctx.answerCbQuery();
   waitingForAmount.add(ctx.from.id);
   ctx.reply('Введите сумму в звездах (только цифры, например: 100):');
 });
 
+// Ловим сумму
 bot.on('text', async (ctx) => {
   const userId = ctx.from.id;
   const username = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
@@ -61,25 +66,21 @@ bot.on('text', async (ctx) => {
       ]]
     };
 
-    // 1. Отправляем в чат (с кнопками)
+    // 1. В чат
     try {
       await bot.telegram.sendMessage(ADMIN_CHAT_ID, adminMsg, {
         parse_mode: 'Markdown',
         reply_markup: replyMarkup
       });
-    } catch (e) {
-      console.log("Ошибка при отправке в чат:", e.message);
-    }
+    } catch (e) { console.log("Ошибка чата:", e.message); }
 
-    // 2. Отправляем тебе в личку (с кнопками)
+    // 2. В ЛС
     try {
       await bot.telegram.sendMessage(ADMIN_IDS[0], adminMsg, {
         parse_mode: 'Markdown',
         reply_markup: replyMarkup
       });
-    } catch (e) {
-      console.log("Ошибка при отправке в личку:", e.message);
-    }
+    } catch (e) { console.log("Ошибка ЛС:", e.message); }
 
     ctx.reply(`✅ Заявка на ${amount} ⭐ создана!\n\n👉 Переведи ${amount} звезд на аккаунт @misurade.\nПосле перевода админ начислит тебе баланс.`);
     
@@ -90,6 +91,7 @@ bot.on('text', async (ctx) => {
   ctx.reply('Нажми /start, чтобы открыть меню.');
 });
 
+// Кнопки
 bot.action(/approve_dep_(\d+)_(\d+)/, async (ctx) => {
   const adminId = ctx.from.id.toString();
   const targetUserId = ctx.match[1];
@@ -102,9 +104,7 @@ bot.action(/approve_dep_(\d+)_(\d+)/, async (ctx) => {
   ctx.answerCbQuery('Начислено!');
   ctx.editMessageText(`✅ Пополнение на ${amount} ⭐ для игрока ${targetUserId} ОДОБРЕНО.`);
   
-  try { 
-    await bot.telegram.sendMessage(targetUserId, `✅ Ваше пополнение на ${amount} ⭐ одобрено!`); 
-  } catch (e) {}
+  try { await bot.telegram.sendMessage(targetUserId, `✅ Ваше пополнение на ${amount} ⭐ одобрено!`); } catch (e) {}
 });
 
 bot.action(/reject_dep_(\d+)/, async (ctx) => {
@@ -118,10 +118,32 @@ bot.action(/reject_dep_(\d+)/, async (ctx) => {
   ctx.answerCbQuery('Отклонено!');
   ctx.editMessageText(`❌ Заявка на пополнение для игрока ${targetUserId} ОТКЛОНЕНА.`);
   
-  try { 
-    await bot.telegram.sendMessage(targetUserId, `❌ Ваша заявка на пополнение отклонена.`); 
-  } catch (e) {}
+  try { await bot.telegram.sendMessage(targetUserId, `❌ Ваша заявка на пополнение отклонена.`); } catch (e) {}
 });
 
-bot.launch({ dropPendingUpdates: true });
+// ===== ФИКС ОШИБКИ 409 (ЗАЩИТА ОТ ВЫЛЕТА) =====
+bot.catch((err, ctx) => {
+  if (err.message.includes('409')) {
+    console.log('Ожидание закрытия старой сессии...');
+  } else {
+    console.error('Ошибка бота:', err.message);
+  }
+});
+
+// Запускаем бота (без dropPendingUpdates, так как он иногда вызывает баг)
+bot.launch().catch(err => {
+  console.log('Ошибка при запуске, пробуем снова через 5 сек...');
+  setTimeout(() => {
+    bot.launch().catch(e => console.log('Повторная ошибка:', e.message));
+  }, 5000);
+});
+
+// Чтобы Render не падал с ошибкой Exited 1
+process.on('unhandledRejection', (reason) => {
+  console.log('Отклоненный промис:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.log('Необработанная ошибка:', err.message);
+});
+
 console.log('Бот запущен!');
