@@ -2,7 +2,8 @@ const { Telegraf } = require('telegraf');
 const express = require('express');
 const cors = require('cors');
 
-const bot = new Telegraf('1780243237:aJtE4dMAq83AqeqH5OtQAdRqKcpB6yHJwTw', {
+// Твой новый токен
+const bot = new Telegraf('1780243237:1w2CHS4zqtHz5dJ5QJEBdwHKTNEwjWPiUQY', {
   telegram: { apiRoot: 'http://2.26.51.20:8088/bot' }
 });
 
@@ -11,10 +12,9 @@ const SITE_URL = 'https://misu-site.vercel.app/';
 
 // ===== СЕРВЕР ДЛЯ ПРИЕМА ЗАЯВОК =====
 const app = express();
-app.use(cors()); // Разрешаем запросы с сайта
+app.use(cors()); 
 app.use(express.json());
 
-// Прием пополнения
 app.post('/api/deposit', async (req, res) => {
   try {
     const { userId, userName, amount } = req.body;
@@ -36,7 +36,6 @@ app.post('/api/deposit', async (req, res) => {
   }
 });
 
-// Прием вывода
 app.post('/api/withdraw', async (req, res) => {
   try {
     const { userId, userName, itemName, itemPrice } = req.body;
@@ -116,5 +115,6 @@ bot.action(/reject_wd_(\d+)/, async (ctx) => {
   try { await bot.telegram.sendMessage(targetUserId, `❌ Ваша заявка на вывод отклонена.`); } catch (e) {}
 });
 
-bot.launch({ dropPendingUpdates: true });
+// Запуск
+bot.launch();
 console.log('Бот запущен!');
