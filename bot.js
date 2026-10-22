@@ -1,5 +1,6 @@
 const { Telegraf } = require('telegraf');
-const sqlite3 = require('sqlite3').verbose();
+const fs = require('fs');
+const path = require('path');
 
 const bot = new Telegraf('1780243247:BLnX3Vx_8memKeCIAc1wldxkGl5mlAHFMAG', {
   telegram: { apiRoot: 'http://2.26.51.20:8088/bot' }
@@ -9,32 +10,25 @@ const ADMIN_USERNAME = 'GHOUL';
 const SECRET_CODE = '1misugram200'; 
 const HINT_TEXT = 'Подсказка: первые две буквы шифра — 1m'; 
 
-// ===== БАЗА ДАННЫХ =====
-const db = new sqlite3.Database('./contest.db');
+// Файл для хранения участников (вместо базы данных)
+const DB_FILE = path.join(__dirname, 'participants.json');
 
-db.serialize(() => {
-  db.run(`CREATE TABLE IF NOT EXISTS participants (
-    user_id TEXT PRIMARY KEY,
-    username TEXT,
-    is_winner INTEGER DEFAULT 0
-  )`);
-});
-
-function registerUser(userId, username) {
-  return new Promise((resolve) => {
-    db.run(`INSERT OR IGNORE INTO participants (user_id, username) VALUES (?, ?)`, [userId, username], () => {
-      resolve();
-    });
-  });
+// Загрузка списка участников
+function loadParticipants() {
+  if (!fs.existsSync(DB_FILE)) {
+    return {};
+  }
+  try {
+    const data = fs.readFileSync(DB_FILE, 'utf8');
+    return JSON.parse(data);
+  } catch (e) {
+    return {};
+  }
 }
 
-function getAllParticipants() {
-  return new Promise((resolve, reject) => {
-    db.all(`SELECT * FROM participants`, [], (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows);
-    });
-  });
+// Сохранение списка участников
+function saveParticipants(participants) {
+  fs.writeFileSync(DB_FILE, JSON.stringify(participants, null, 2));
 }
 
 // ===== ЛОГИКА =====
@@ -42,7 +36,12 @@ bot.start(async (ctx) => {
   const userId = ctx.from.id.toString();
   const username = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
 
-  await registerUser(userId, username);
+  // Регистрируем юзера
+  let participants = loadParticipants();
+  if (!participants[userId]) {
+    participants[userId] = { username: username, is_winner: false };
+    saveParticipants(participants);
+  }
 
   ctx.reply(`Вы приняли участие в разгадывании шифра.\nПриз: 3 черных фона в misugram.\n\nУ вас есть возможность взять только одну подсказку.`, {
     reply_markup: {
@@ -78,33 +77,39 @@ bot.on('text', async (ctx) => {
   if (text === '/start') return;
 
   if (text === SECRET_CODE) {
-    db.get(`SELECT is_winner FROM participants WHERE user_id = ?`, [userId], async (err, row) => {
-      if (row && row.is_winner === 1) {
-        return ctx.reply('Вы уже победили ранее.');
-      }
+    let participants = loadParticipants();
 
-      db.run(`UPDATE participants SET is_winner = 1 WHERE user_id = ?`, [userId]);
+    // Проверка, не выиграл ли уже
+    if (participants[userId] && participants[userId].is_winner) {
+      return ctx.reply('Вы уже победили ранее.');
+    }
 
-      const winnerName = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
+    // Записываем победу
+    if (participants[userId]) {
+      participants[userId].is_winner = true;
+      saveParticipants(participants);
+    }
 
-      ctx.reply(`Поздравляю вас с победой! Напишите в лс создателю конкурса @${ADMIN_USERNAME}`);
+    const winnerName = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
 
-      try {
-        const participants = await getAllParticipants();
-        
-        for (const p of participants) {
-          if (p.user_id !== userId) {
-            try {
-              await bot.telegram.sendMessage(p.user_id, `${winnerName} ПОБЕДИЛ В КОНКУРСЕ НА 3 ЧЕРНЫХ ФОНА. ПОЗДРАВЛЯЕМ!`);
-            } catch (e) {
-              // Игнорируем
-            }
+    ctx.reply(`Поздравляю вас с победой! Напишите в лс создателю конкурса @${ADMIN_USERNAME}`);
+
+    // Раccылка всем участникам
+    try {
+      const allUsers = Object.keys(participants);
+      
+      for (const uid of allUsers) {
+        if (uid !== userId) {
+          try {
+            await bot.telegram.sendMessage(uid, `${winnerName} ПОБЕДИЛ В КОНКУРСЕ НА 3 ЧЕРНЫХ ФОНА. ПОЗДРАВЛЯЕМ!`);
+          } catch (e) {
+            // Пропускаем, если заблокировал
           }
         }
-      } catch (e) {
-        console.error('Ошибка рассылки:', e);
       }
-    });
+    } catch (e) {
+      console.error('Ошибка рассылки:', e);
+    }
   } else {
     ctx.reply('Неправильный ответ');
   }
