@@ -1,4 +1,6 @@
 const { Telegraf } = require('telegraf');
+const express = require('express');
+const cors = require('cors');
 
 const bot = new Telegraf('1780243237:aJtE4dMAq83AqeqH5OtQAdRqKcpB6yHJwTw', {
   telegram: { apiRoot: 'http://2.26.51.20:8088/bot' }
@@ -7,58 +9,76 @@ const bot = new Telegraf('1780243237:aJtE4dMAq83AqeqH5OtQAdRqKcpB6yHJwTw', {
 const ADMIN_CHAT_ID = '-100243'; 
 const SITE_URL = 'https://misu-site.vercel.app/'; 
 
-// ===== ОБРАБОТКА /start (С ПАРАМЕТРАМИ ОТ САЙТА) =====
+// ===== СЕРВЕР ДЛЯ ПРИЕМА ЗАЯВОК =====
+const app = express();
+app.use(cors()); // Разрешаем запросы с сайта
+app.use(express.json());
+
+// Прием пополнения
+app.post('/api/deposit', async (req, res) => {
+  try {
+    const { userId, userName, amount } = req.body;
+    const adminMsg = `💰 **ЗАЯВКА НА ПОПОЛНЕНИЕ**\n\n👤 Игрок: ${userName}\n🆔 ID: ${userId}\n⭐ Сумма: ${amount} звезд`;
+
+    await bot.telegram.sendMessage(ADMIN_CHAT_ID, adminMsg, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [[
+          { text: '✅ Начислить', callback_data: `approve_dep_${userId}_${amount}` },
+          { text: '❌ Отклонить', callback_data: `reject_dep_${userId}` }
+        ]]
+      }
+    });
+    res.status(200).send('OK');
+  } catch (e) {
+    console.error(e);
+    res.status(500).send('Error');
+  }
+});
+
+// Прием вывода
+app.post('/api/withdraw', async (req, res) => {
+  try {
+    const { userId, userName, itemName, itemPrice } = req.body;
+    const adminMsg = `📥 **НОВАЯ ЗАЯВКА НА ВЫВОД**\n\n👤 Игрок: ${userName}\n🆔 ID: ${userId}\n🎁 Подарок: ${itemName}\n💰 Стоимость: ${itemPrice} ⭐`;
+
+    await bot.telegram.sendMessage(ADMIN_CHAT_ID, adminMsg, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [[
+          { text: '✅ Выдать', callback_data: `approve_wd_${userId}` },
+          { text: '❌ Отклонить', callback_data: `reject_wd_${userId}` }
+        ]]
+      }
+    });
+    res.status(200).send('OK');
+  } catch (e) {
+    console.error(e);
+    res.status(500).send('Error');
+  }
+});
+
+app.listen(process.env.PORT || 3000, () => {
+  console.log('Сервер для заявок запущен!');
+});
+
+// ===== ЛОГИКА БОТА =====
 bot.start(async (ctx) => {
   const userId = ctx.from.id.toString();
   const username = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
-  const payload = ctx.startPayload; // То, что передал сайт (dep_100 или wd_75_Tamagochi)
+  
+  let avatarUrl = "https://via.placeholder.com/40";
+  try {
+    const photos = await ctx.telegram.getUserProfilePhotos(userId, 0, 1);
+    if (photos.total_count > 0) {
+      const fileId = photos.photos[0][0].file_id;
+      const fileLink = await ctx.telegram.getFileLink(fileId);
+      avatarUrl = fileLink.href;
+    }
+  } catch (e) {}
 
-  // Если пришли с сайта с заявкой на пополнение
-  if (payload && payload.startsWith('dep_')) {
-    const amount = parseInt(payload.split('_')[1]);
-    
-    const adminMsg = `💰 **ЗАЯВКА НА ПОПОЛНЕНИЕ**\n\n👤 Игрок: ${username}\n🆔 ID: ${userId}\n⭐ Сумма: ${amount} звезд`;
+  const gameUrl = `${SITE_URL}?tg_id=${userId}&name=${encodeURIComponent(username)}&avatar=${encodeURIComponent(avatarUrl)}`;
 
-    try {
-      await bot.telegram.sendMessage(ADMIN_CHAT_ID, adminMsg, {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [[
-            { text: '✅ Начислить', callback_data: `approve_dep_${userId}_${amount}` },
-            { text: '❌ Отклонить', callback_data: `reject_dep_${userId}` }
-          ]]
-        }
-      });
-    } catch (e) { console.log("Ошибка отправки:", e.message); }
-
-    return ctx.reply(`Заявка на пополнение ${amount} ⭐ создана!\n\n👉 Переведи ${amount} звезд на аккаунт @misurade.\nПосле перевода админ начислит тебе баланс.`);
-  }
-
-  // Если пришли с заявкой на вывод
-  if (payload && payload.startsWith('wd_')) {
-    const parts = payload.split('_');
-    const price = parts[1];
-    const itemName = decodeURIComponent(parts[2] || 'Подарок');
-
-    const adminMsg = `📥 **НОВАЯ ЗАЯВКА НА ВЫВОД**\n\n👤 Игрок: ${username}\n🆔 ID: ${userId}\n🎁 Подарок: ${itemName}\n💰 Стоимость: ${price} ⭐`;
-
-    try {
-      await bot.telegram.sendMessage(ADMIN_CHAT_ID, adminMsg, {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [[
-            { text: '✅ Выдать', callback_data: `approve_wd_${userId}` },
-            { text: '❌ Отклонить', callback_data: `reject_wd_${userId}` }
-          ]]
-        }
-      });
-    } catch (e) {}
-
-    return ctx.reply(`Заявка на вывод "${itemName}" создана. Ожидайте.`);
-  }
-
-  // Обычный старт
-  const gameUrl = `${SITE_URL}?tg_id=${userId}&name=${encodeURIComponent(username)}`;
   ctx.reply(`Добро пожаловать, ${username}!\nТвой ID: ${userId}\n\nНажми кнопку ниже, чтобы играть.`, {
     reply_markup: {
       inline_keyboard: [[ { text: '🎮 Открыть игру', web_app: { url: gameUrl } } ]]
@@ -66,7 +86,7 @@ bot.start(async (ctx) => {
   });
 });
 
-// ===== ОБРАБОТКА КНОПОК В ЧАТЕ =====
+// Обработка кнопок
 bot.action(/approve_dep_(\d+)_(\d+)/, async (ctx) => {
   const targetUserId = ctx.match[1];
   const amount = ctx.match[2];
