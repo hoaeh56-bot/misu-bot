@@ -9,115 +9,108 @@ const bot = new Telegraf('1780243237:1w2CHS4zqtHz5dJ5QJEBdwHKTNEwjWPiUQY', {
 const ADMIN_CHAT_ID = '-100243'; 
 const SITE_URL = 'https://misu-site.vercel.app/'; 
 
-// ===== СЕРВЕР =====
+// Сервер для сайта (чтобы не падал Render)
 const app = express();
 app.use(cors()); 
 app.use(express.json());
+app.listen(process.env.PORT || 3000, () => console.log('Сервер запущен!'));
 
-app.post('/api/deposit', async (req, res) => {
-  try {
-    const { userId, userName, amount } = req.body;
-    const adminMsg = `💰 **ЗАЯВКА НА ПОПОЛНЕНИЕ**\n\n👤 Игрок: ${userName}\n🆔 ID: ${userId}\n⭐ Сумма: ${amount} звезд`;
+// Переменная для ожидания ввода суммы
+const waitingForAmount = new Set();
 
-    await bot.telegram.sendMessage(ADMIN_CHAT_ID, adminMsg, {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: [[
-          { text: '✅ Начислить', callback_data: `approve_dep_${userId}_${amount}` },
-          { text: '❌ Отклонить', callback_data: `reject_dep_${userId}` }
-        ]]
-      }
-    });
-    res.status(200).send('OK');
-  } catch (e) {
-    res.status(500).send('Error');
-  }
-});
-
-app.post('/api/withdraw', async (req, res) => {
-  try {
-    const { userId, userName, itemName, itemPrice } = req.body;
-    const adminMsg = `📥 **НОВАЯ ЗАЯВКА НА ВЫВОД**\n\n👤 Игрок: ${userName}\n🆔 ID: ${userId}\n🎁 Подарок: ${itemName}\n💰 Стоимость: ${itemPrice} ⭐`;
-
-    await bot.telegram.sendMessage(ADMIN_CHAT_ID, adminMsg, {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: [[
-          { text: '✅ Выдать', callback_data: `approve_wd_${userId}` },
-          { text: '❌ Отклонить', callback_data: `reject_wd_${userId}` }
-        ]]
-      }
-    });
-    res.status(200).send('OK');
-  } catch (e) {
-    res.status(500).send('Error');
-  }
-});
-
-// Запускаем сервер, а затем бота
-const server = app.listen(process.env.PORT || 3000, () => {
-  console.log('Сервер для заявок запущен!');
-  
-  // Небольшая задержка перед запуском бота, чтобы Render не дублировал процесс
-  setTimeout(() => {
-    bot.launch({ dropPendingUpdates: true }).then(() => {
-      console.log('Бот запущен!');
-    }).catch(err => {
-      console.error('Ошибка запуска бота:', err.message);
-    });
-  }, 3000); // Ждем 3 секунды
-});
-
-// ===== ЛОГИКА БОТА =====
-bot.start(async (ctx) => {
+// ===== СТАРТ =====
+bot.start((ctx) => {
   const userId = ctx.from.id.toString();
   const username = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
   
-  let avatarUrl = "https://via.placeholder.com/40";
-  try {
-    const photos = await ctx.telegram.getUserProfilePhotos(userId, 0, 1);
-    if (photos.total_count > 0) {
-      const fileId = photos.photos[0][0].file_id;
-      const fileLink = await ctx.telegram.getFileLink(fileId);
-      avatarUrl = fileLink.href;
-    }
-  } catch (e) {}
+  // Ссылка на игру с ID игрока
+  const gameUrl = `${SITE_URL}?tg_id=${userId}&name=${encodeURIComponent(username)}`;
 
-  const gameUrl = `${SITE_URL}?tg_id=${userId}&name=${encodeURIComponent(username)}&avatar=${encodeURIComponent(avatarUrl)}`;
-
-  ctx.reply(`Добро пожаловать, ${username}!\nТвой ID: ${userId}\n\nНажми кнопку ниже, чтобы играть.`, {
+  ctx.reply(`Добро пожаловать, ${username}!\nТвой ID: ${userId}\n\nВыбери действие:`, {
     reply_markup: {
-      inline_keyboard: [[ { text: '🎮 Открыть игру', web_app: { url: gameUrl } } ]]
+      inline_keyboard: [
+        [{ text: '🎮 Открыть игру', web_app: { url: gameUrl } }],
+        [{ text: '💰 Пополнить баланс', callback_data: 'deposit_start' }]
+      ]
     }
   });
 });
 
-// Обработка кнопок
+// ===== КНОПКА ПОПОЛНЕНИЯ =====
+bot.action('deposit_start', (ctx) => {
+  ctx.answerCbQuery();
+  waitingForAmount.add(ctx.from.id);
+  ctx.reply('Введите сумму в звездах (только цифры, например: 100):');
+});
+
+// ===== ЛОВИМ СУММУ =====
+bot.on('text', async (ctx) => {
+  const userId = ctx.from.id;
+  const username = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
+  const text = ctx.message.text.trim();
+
+  if (text === '/start') return;
+
+  // Если игрок в режиме ожидания суммы
+  if (waitingForAmount.has(userId)) {
+    const amount = parseInt(text);
+    
+    if (isNaN(amount) || amount < 1) {
+      return ctx.reply('Пожалуйста, введите корректную сумму цифрами (например, 100).');
+    }
+
+    // Отправляем уведомление тебе
+    const adminMsg = `💰 **ЗАЯВКА НА ПОПОЛНЕНИЕ**\n\n👤 Игрок: ${username}\n🆔 ID: ${userId}\n⭐ Сумма: ${amount} звезд`;
+
+    try {
+      await bot.telegram.sendMessage(ADMIN_CHAT_ID, adminMsg, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '✅ Начислить', callback_data: `approve_dep_${userId}_${amount}` },
+            { text: '❌ Отклонить', callback_data: `reject_dep_${userId}` }
+          ]]
+        }
+      });
+    } catch (e) {
+      console.log("Ошибка отправки админу:", e.message);
+    }
+
+    // Инструкция игроку
+    ctx.reply(`✅ Заявка на ${amount} ⭐ создана!\n\n👉 Переведи ${amount} звезд на аккаунт @misurade.\nПосле перевода админ начислит тебе баланс.`);
+    
+    waitingForAmount.delete(userId);
+    return;
+  }
+
+  // Если просто пишет текст
+  ctx.reply('Нажми /start, чтобы открыть меню.');
+});
+
+// ===== ОБРАБОТКА КНОПОК АДМИНА =====
 bot.action(/approve_dep_(\d+)_(\d+)/, async (ctx) => {
   const targetUserId = ctx.match[1];
   const amount = ctx.match[2];
+  
   ctx.answerCbQuery('Начислено!');
   ctx.editMessageText(`✅ Пополнение на ${amount} ⭐ для игрока ${targetUserId} ОДОБРЕНО.`);
-  try { await bot.telegram.sendMessage(targetUserId, `✅ Ваше пополнение на ${amount} ⭐ одобрено!`); } catch (e) {}
-});
-
-bot.action(/approve_wd_(\d+)/, async (ctx) => {
-  const targetUserId = ctx.match[1];
-  ctx.answerCbQuery('Выдано!');
-  ctx.editMessageText(`✅ Вывод для игрока ${targetUserId} ОДОБРЕН.`);
-  try { await bot.telegram.sendMessage(targetUserId, `✅ Ваша заявка на вывод одобрена!`); } catch (e) {}
+  
+  try { 
+    await bot.telegram.sendMessage(targetUserId, `✅ Ваше пополнение на ${amount} ⭐ одобрено! Баланс пополнен.`); 
+  } catch (e) {}
 });
 
 bot.action(/reject_dep_(\d+)/, async (ctx) => {
   const targetUserId = ctx.match[1];
+  
   ctx.answerCbQuery('Отклонено!');
   ctx.editMessageText(`❌ Заявка на пополнение для игрока ${targetUserId} ОТКЛОНЕНА.`);
-  try { await bot.telegram.sendMessage(targetUserId, `❌ Ваша заявка на пополнение отклонена.`); } catch (e) {}
+  
+  try { 
+    await bot.telegram.sendMessage(targetUserId, `❌ Ваша заявка на пополнение отклонена.`); 
+  } catch (e) {}
 });
 
-bot.action(/reject_wd_(\d+)/, async (ctx) => {
-  const targetUserId = ctx.match[1];
-  ctx.answerCbQuery('Отклонено!');
-  ctx.editMessageText(`❌ Заявка на вывод для игрока ${targetUserId} ОТКЛОНЕНА.`);
-  try { await bot.telegram.sendMessage(targetUserId, `❌ Ваша заявка на вывод отклонена.`); } catch (e) {}
-}); 
+// Запуск бота
+bot.launch();
+console.log('Бот запущен!');
