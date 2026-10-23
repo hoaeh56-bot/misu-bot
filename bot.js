@@ -1,3 +1,4 @@
+1780243233:jdmYR3YJAJCPYU5qNN7HLtwYHZXvrWvS57h
 const { Telegraf } = require('telegraf');
 
 const TOKEN = '1780243233:jdmYR3YJAJCPYU5qNN7HLtwYHZXvrWvS57h';
