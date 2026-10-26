@@ -18,7 +18,6 @@ dp = Dispatcher()
 DB = "stats.db"
 TARGET_CHAT_ID = -10022  # Тот самый чат MisuGram
 
-# ========== БАЗА ДАННЫХ ==========
 def init_db():
     con = sqlite3.connect(DB)
     con.execute("""
@@ -63,7 +62,6 @@ def clear_old_messages():
     con.commit()
     con.close()
 
-# ========== ЛОВИМ ВСЕ СООБЩЕНИЯ ==========
 @dp.message(F.text)
 async def count_messages(message: Message):
     if message.text.startswith("/"):
@@ -73,7 +71,6 @@ async def count_messages(message: Message):
     name = f"@{user.username}" if user.username else user.full_name
     add_message(message.chat.id, user.id, name)
 
-# ========== КОМАНДА /top ==========
 @dp.message(Command("top"))
 async def cmd_top(message: Message):
     top = get_top(message.chat.id)
@@ -89,7 +86,6 @@ async def cmd_top(message: Message):
         
     await message.answer(text)
 
-# ========== АВТОМАТИЧЕСКИЙ ИТОГ В 21:30 ==========
 async def daily_summary():
     while True:
         now = datetime.now()
@@ -109,7 +105,6 @@ async def daily_summary():
                 except Exception as e:
                     logging.error(f"Ошибка отправки итогов: {e}")
             
-            # Ждем минуту, чтобы не спамить
             await asyncio.sleep(60)
         else:
             await asyncio.sleep(20)
@@ -126,7 +121,6 @@ async def main():
     init_db()
     clear_old_messages()
     
-    # Запускаем таймер в фоне
     asyncio.create_task(daily_summary())
     
     try:
