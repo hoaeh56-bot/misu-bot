@@ -47,25 +47,24 @@ UNMUTE_PERMISSIONS = ChatPermissions(
     can_add_web_page_previews=True,
 )
 
-
+# ИЗМЕНЕНИЕ 1: Проверка админа теперь работает в любом чате
 async def is_chat_admin(message: Message) -> bool:
-    if message.chat.id != config.CHAT_ID:
-        return False
+    # Твой личный ID (из config.py) всегда имеет доступ
     if message.from_user.id in config.EXTRA_ADMIN_IDS:
         return True
+        
+    # Проверяем, является ли человек админом именно в ЭТОМ чате
     try:
-        member = await bot.get_chat_member(config.CHAT_ID, message.from_user.id)
+        member = await bot.get_chat_member(message.chat.id, message.from_user.id)
         return member.status in ("administrator", "creator")
     except Exception as e:
         log.warning("get_chat_member failed: %s", e)
         return False
 
-
 def get_target(message: Message):
     if not message.reply_to_message:
         return None
     return message.reply_to_message.from_user
-
 
 def parse_duration(arg: str):
     if not arg:
@@ -79,7 +78,6 @@ def parse_duration(arg: str):
         total += int(num) * units[unit]
     return total if total > 0 else None
 
-
 def fmt_duration(seconds: int) -> str:
     if seconds >= 86400:
         return f"{seconds // 86400}d"
@@ -88,7 +86,6 @@ def fmt_duration(seconds: int) -> str:
     if seconds >= 60:
         return f"{seconds // 60}m"
     return f"{seconds}s"
-
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
@@ -103,11 +100,9 @@ async def cmd_start(message: Message):
         "Time: 30m, 1h, 2d, 1h30m"
     )
 
-
 @dp.message(Command("chatid"))
 async def cmd_chatid(message: Message):
     await message.answer(f"Chat ID: <code>{message.chat.id}</code>")
-
 
 @dp.message(Command("mute"))
 async def cmd_mute(message: Message):
@@ -130,8 +125,9 @@ async def cmd_mute(message: Message):
     until = datetime.now() + timedelta(seconds=seconds)
 
     try:
+        # ИЗМЕНЕНИЕ 2: Мут применяется в текущем чате
         await bot.restrict_chat_member(
-            chat_id=config.CHAT_ID,
+            chat_id=message.chat.id,
             user_id=target.id,
             permissions=MUTE_PERMISSIONS,
             until_date=until,
@@ -140,7 +136,6 @@ async def cmd_mute(message: Message):
     except Exception as e:
         log.error("mute failed: %s", e)
         await message.reply(f"Error: {e}")
-
 
 @dp.message(Command("unmute"))
 async def cmd_unmute(message: Message):
@@ -154,8 +149,9 @@ async def cmd_unmute(message: Message):
         return
 
     try:
+        # ИЗМЕНЕНИЕ 3: Размут применяется в текущем чате
         await bot.restrict_chat_member(
-            chat_id=config.CHAT_ID,
+            chat_id=message.chat.id,
             user_id=target.id,
             permissions=UNMUTE_PERMISSIONS,
         )
@@ -163,7 +159,6 @@ async def cmd_unmute(message: Message):
     except Exception as e:
         log.error("unmute failed: %s", e)
         await message.reply(f"Error: {e}")
-
 
 @dp.message(Command("ban"))
 async def cmd_ban(message: Message):
@@ -177,8 +172,9 @@ async def cmd_ban(message: Message):
         return
 
     try:
+        # ИЗМЕНЕНИЕ 4: Бан применяется в текущем чате
         await bot.ban_chat_member(
-            chat_id=config.CHAT_ID,
+            chat_id=message.chat.id,
             user_id=target.id,
             revoke_messages=True,
         )
@@ -186,7 +182,6 @@ async def cmd_ban(message: Message):
     except Exception as e:
         log.error("ban failed: %s", e)
         await message.reply(f"Error: {e}")
-
 
 @dp.message(Command("unban"))
 async def cmd_unban(message: Message):
@@ -200,8 +195,9 @@ async def cmd_unban(message: Message):
         return
 
     try:
+        # ИЗМЕНЕНИЕ 5: Разбан применяется в текущем чате
         await bot.unban_chat_member(
-            chat_id=config.CHAT_ID,
+            chat_id=message.chat.id,
             user_id=target.id,
         )
         await message.reply(f"{target.full_name} unbanned.")
@@ -209,14 +205,7 @@ async def cmd_unban(message: Message):
         log.error("unban failed: %s", e)
         await message.reply(f"Error: {e}")
 
-
 async def main():
-    if config.CHAT_ID == 0:
-        log.warning(
-            "CHAT_ID is 0 in config.py. Moderation commands will be ignored. "
-            "Send /chatid in the chat and set the value."
-        )
-
     try:
         await bot.delete_webhook(drop_pending_updates=True)
     except Exception as e:
@@ -226,7 +215,6 @@ async def main():
         await dp.start_polling(bot)
     finally:
         await bot.session.close()
-
 
 if __name__ == "__main__":
     asyncio.run(main())
