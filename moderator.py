@@ -90,34 +90,45 @@ async def cmd_start(message: Message):
     await message.answer(
         "Привет! Я бот-цитатник.\n\n"
         "Команды:\n"
-        "/quote (реплаем) — сохранить цитату\n"
-        "/random — случайная цитата из чата\n"
+        "/quote Текст цитаты — сохранить от своего имени\n"
+        "/quote @ник Текст цитаты — сохранить от чужого имени\n"
+        "/random — случайная цитата\n"
         "/joke — случайная шутка\n"
-        "/mix — сгенерировать шутку из сообщений чата\n"
+        "/mix — сгенерировать мем из цитат чата\n"
     )
 
 @dp.message(Command("quote"))
 async def cmd_quote(message: Message):
-    if not message.reply_to_message:
-        await message.reply("Ответь (Reply) на сообщение, которое хочешь сохранить как цитату.")
+    # Получаем текст после команды /quote
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.reply("Напиши цитату! Пример:\n/quote Я тут главный\n/quote @user Я тут главный")
         return
 
-    text = message.reply_to_message.text or message.reply_to_message.caption
-    if not text:
-        await message.reply("Это сообщение нельзя сохранить (нет текста).")
-        return
-
-    user = message.reply_to_message.from_user
-    author = f"@{user.username}" if user.username else user.full_name
+    content = parts[1].strip()
+    
+    # Проверяем, начинается ли с @ника
+    if content.startswith("@"):
+        author_parts = content.split(maxsplit=1)
+        author = author_parts[0]
+        if len(author_parts) < 2:
+            await message.reply("Ты указал ник, но забыл саму цитату!")
+            return
+        text = author_parts[1]
+    else:
+        # Если ник не указан, берем имя того, кто пишет
+        user = message.from_user
+        author = f"@{user.username}" if user.username else user.full_name
+        text = content
 
     add_quote(message.chat.id, author, text)
-    await message.reply(f"✅ Цитата от {author} сохранена!")
+    await message.reply(f"✅ Цитата сохранена! Автор: {author}")
 
 @dp.message(Command("random"))
 async def cmd_random(message: Message):
     row = get_random_quote(message.chat.id)
     if not row:
-        await message.reply("В этом чате еще нет цитат. Сохрани первую через /quote (реплаем)!")
+        await message.reply("В этом чате еще нет цитат. Добавь через /quote!")
         return
 
     author, text, date = row
@@ -136,12 +147,12 @@ async def cmd_joke(message: Message):
 async def cmd_mix(message: Message):
     rows = get_two_quotes(message.chat.id)
     if len(rows) < 2:
-        await message.reply("Нужно минимум 2 сохраненные цитаты для генерации шутки.")
+        await message.reply("Нужно минимум 2 цитаты для генерации. Добавь еще через /quote!")
         return
 
     (author1, text1), (author2, text2) = rows[0], rows[1]
     
-    # Обрезаем слишком длинные тексты для приличия
+    # Обрезаем слишком длинные тексты
     text1 = text1[:50] + "..." if len(text1) > 50 else text1
     text2 = text2[:50] + "..." if len(text2) > 50 else text2
 
@@ -161,17 +172,13 @@ async def cmd_mix(message: Message):
         f"Совет дня от {author1}: «{text1}».\n"
         f"Совет дня от {author2}: «{text2}».\n"
         f"Выбирай, кому верить.",
+        
+        f"Срочные новости! {author1} заявил: «{text1}».\n"
+        f"Однако {author2} не согласен: «{text2}»."
     ]
 
     result = random.choice(templates)
     await message.answer(f"🎭 **Шутка дня**\n\n{result}")
-
-# ========== СОХРАНЕНИЕ ВСЕХ СООБЩЕНИЙ (чтобы было больше цитат) ==========
-@dp.message(F.text)
-async def auto_save(message: Message):
-    # Можно сделать, чтобы бот сам сохранял ВСЕ сообщения (или только длинные/смешные)
-    # Сейчас по умолчанию просто пропускает, чтобы база не забивалась мусором.
-    pass
 
 async def main():
     init_db()
