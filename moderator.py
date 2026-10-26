@@ -16,7 +16,7 @@ bot = Bot(token=config.TOKEN, session=session)
 dp = Dispatcher()
 
 DB = "stats.db"
-TARGET_CHAT_ID = -10022  # Тот самый чат MisuGram
+TARGET_CHAT_ID = -10022
 
 def init_db():
     con = sqlite3.connect(DB)
@@ -62,14 +62,14 @@ def clear_old_messages():
     con.commit()
     con.close()
 
-@dp.message(F.text)
-async def count_messages(message: Message):
-    if message.text.startswith("/"):
-        return
-    
-    user = message.from_user
-    name = f"@{user.username}" if user.username else user.full_name
-    add_message(message.chat.id, user.id, name)
+# ========== КОМАНДЫ (ДОЛЖНЫ БЫТЬ ВЫШЕ ВСЕГО) ==========
+@dp.message(CommandStart())
+async def cmd_start(message: Message):
+    await message.answer(
+        "Привет! Я считаю активность.\n"
+        "/top — топ-3 за сегодня\n"
+        "В 21:30 подвожу итоги!"
+    )
 
 @dp.message(Command("top"))
 async def cmd_top(message: Message):
@@ -86,6 +86,17 @@ async def cmd_top(message: Message):
         
     await message.answer(text)
 
+# ========== СЧЕТЧИК СООБЩЕНИЙ (НИЖЕ КОМАНД) ==========
+@dp.message(F.text)
+async def count_messages(message: Message):
+    if message.text.startswith("/"):
+        return
+    
+    user = message.from_user
+    name = f"@{user.username}" if user.username else user.full_name
+    add_message(message.chat.id, user.id, name)
+
+# ========== АВТОМАТИЧЕСКИЙ ИТОГ В 21:30 ==========
 async def daily_summary():
     while True:
         now = datetime.now()
@@ -108,14 +119,6 @@ async def daily_summary():
             await asyncio.sleep(60)
         else:
             await asyncio.sleep(20)
-
-@dp.message(CommandStart())
-async def cmd_start(message: Message):
-    await message.answer(
-        "Привет! Я считаю активность.\n"
-        "/top — топ-3 за сегодня\n"
-        "В 21:30 подвожу итоги!"
-    )
 
 async def main():
     init_db()
