@@ -1,11 +1,12 @@
 import asyncio
 import logging
-import re
-from datetime import datetime, timedelta
+import random
+import sqlite3
+from datetime import datetime
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message, ChatPermissions
+from aiogram.types import Message
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 
@@ -15,179 +16,170 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
-log = logging.getLogger("moderator")
+log = logging.getLogger("quotes")
 
 session = AiohttpSession(api=TelegramAPIServer.from_base(config.API_SERVER))
 bot = Bot(token=config.TOKEN, session=session)
 dp = Dispatcher()
 
-MUTE_PERMISSIONS = ChatPermissions(
-    can_send_messages=False, can_send_audios=False, can_send_documents=False,
-    can_send_photos=False, can_send_videos=False, can_send_video_notes=False,
-    can_send_voice_notes=False, can_send_polls=False, can_send_other_messages=False,
-    can_add_web_page_previews=False,
-)
+DB = "quotes.db"
 
-UNMUTE_PERMISSIONS = ChatPermissions(
-    can_send_messages=True, can_send_audios=True, can_send_documents=True,
-    can_send_photos=True, can_send_videos=True, can_send_video_notes=True,
-    can_send_voice_notes=True, can_send_polls=True, can_send_other_messages=True,
-    can_add_web_page_previews=True,
-)
+# ========== БАЗА ДАННЫХ ==========
+def init_db():
+    con = sqlite3.connect(DB)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS quotes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER,
+            author TEXT,
+            text TEXT,
+            created_at TEXT
+        )
+    """)
+    con.commit()
+    con.close()
 
-async def is_chat_admin(message: Message) -> bool:
-    # Твой ID из config.py всегда может всё
-    if message.from_user.id in config.EXTRA_ADMIN_IDS:
-        return True
-    try:
-        member = await bot.get_chat_member(message.chat.id, message.from_user.id)
-        return member.status in ("administrator", "creator")
-    except Exception as e:
-        log.warning("get_chat_member failed: %s", e)
-        return False
+def add_quote(chat_id: int, author: str, text: str):
+    con = sqlite3.connect(DB)
+    con.execute(
+        "INSERT INTO quotes (chat_id, author, text, created_at) VALUES (?, ?, ?, ?)",
+        (chat_id, author, text, datetime.now().strftime("%Y-%m-%d %H:%M"))
+    )
+    con.commit()
+    con.close()
 
-async def get_target_id(message: Message):
-    # 1. Пытаемся взять ID из Reply
-    if message.reply_to_message and message.reply_to_message.from_user:
-        return message.reply_to_message.from_user.id
+def get_random_quote(chat_id: int):
+    con = sqlite3.connect(DB)
+    row = con.execute(
+        "SELECT author, text, created_at FROM quotes WHERE chat_id = ? ORDER BY RANDOM() LIMIT 1",
+        (chat_id,)
+    ).fetchone()
+    con.close()
+    return row
 
-    # 2. Пытаемся найти цифровой ID в тексте
-    parts = message.text.split()
-    for part in parts[1:]:
-        if part.isdigit():
-            return int(part)
+def get_two_quotes(chat_id: int):
+    con = sqlite3.connect(DB)
+    rows = con.execute(
+        "SELECT author, text FROM quotes WHERE chat_id = ? ORDER BY RANDOM() LIMIT 2",
+        (chat_id,)
+    ).fetchall()
+    con.close()
+    return rows
 
-    return None
-
-def parse_duration(arg: str):
-    if not arg: return None
-    matches = re.findall(r"(\d+)\s*([smhd])", arg.lower())
-    if not matches: return None
-    units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-    return sum(int(num) * units[unit] for num, unit in matches) or None
-
-def fmt_duration(seconds: int) -> str:
-    if seconds >= 86400: return f"{seconds // 86400}d"
-    if seconds >= 3600: return f"{seconds // 3600}h"
-    if seconds >= 60: return f"{seconds // 60}m"
-    return f"{seconds}s"
+# ========== ВСТРОЕННЫЕ ШУТКИ ==========
+JOKES = [
+    "Программист — это машина для превращения кофе в код.",
+    "Я не ленивый, я просто в энергосберегающем режиме.",
+    "Мой код не багованный, это фича!",
+    "Если долго смотреть в монитор, можно увидеть, как проходит жизнь.",
+    "Я не толстый, это просто кэш от интернета.",
+    "Всем привет, я тут просто мимо проходил.",
+    "Работа не волк, в лес не убежит. А я убегу.",
+    "Не откладывай на завтра то, что можно вообще не делать.",
+    "Сон — это лучшее изобретение человечества.",
+    "Лучший способ начать день — это не начинать его слишком рано.",
+    "Ты не ты, когда голоден. А я всегда голоден.",
+    "Мой IQ равен 100, но утром он падает до 10.",
+    "Все проблемы решаются сном. Проверено.",
+    "Я не опаздываю, я просто задерживаюсь в прошлом.",
+    "Если что-то не получается — значит, это не твое.",
+]
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
-    await message.answer("Привет! Я бот-модератор.\n\nПиши /help для списка команд.")
-
-@dp.message(Command("help"))
-async def cmd_help(message: Message):
     await message.answer(
+        "Привет! Я бот-цитатник.\n\n"
         "Команды:\n"
-        "/mute 1h (реплаем) - мут\n"
-        "/ban (реплаем) - бан навсегда\n"
-        "/unmute (реплаем)\n"
-        "/unban (реплаем)\n\n"
-        "Также можно по ID: /ban 123456789"
+        "/quote (реплаем) — сохранить цитату\n"
+        "/random — случайная цитата из чата\n"
+        "/joke — случайная шутка\n"
+        "/mix — сгенерировать шутку из сообщений чата\n"
     )
 
-@dp.message(Command("chatid"))
-async def cmd_chatid(message: Message):
-    await message.answer(f"ID этого чата: <code>{message.chat.id}</code>")
-
-@dp.message(Command("mute"))
-async def cmd_mute(message: Message):
-    if not await is_chat_admin(message):
-        await message.reply("Только админы могут мутить.")
+@dp.message(Command("quote"))
+async def cmd_quote(message: Message):
+    if not message.reply_to_message:
+        await message.reply("Ответь (Reply) на сообщение, которое хочешь сохранить как цитату.")
         return
 
-    target_id = await get_target_id(message)
-    if not target_id:
-        await message.reply("Ошибка: ответь (Reply) на сообщение нарушителя или напиши его ID.")
+    text = message.reply_to_message.text or message.reply_to_message.caption
+    if not text:
+        await message.reply("Это сообщение нельзя сохранить (нет текста).")
         return
 
-    parts = message.text.split()
-    arg = "1h"
-    for part in parts[1:]:
-        if not part.isdigit():
-            arg = part
-            break
+    user = message.reply_to_message.from_user
+    author = f"@{user.username}" if user.username else user.full_name
 
-    seconds = parse_duration(arg)
-    if seconds is None:
-        await message.reply("Неверное время. Пример: 30m, 1h, 2d")
+    add_quote(message.chat.id, author, text)
+    await message.reply(f"✅ Цитата от {author} сохранена!")
+
+@dp.message(Command("random"))
+async def cmd_random(message: Message):
+    row = get_random_quote(message.chat.id)
+    if not row:
+        await message.reply("В этом чате еще нет цитат. Сохрани первую через /quote (реплаем)!")
         return
 
-    until = datetime.now() + timedelta(seconds=seconds)
-    try:
-        await bot.restrict_chat_member(
-            chat_id=message.chat.id,
-            user_id=target_id,
-            permissions=MUTE_PERMISSIONS,
-            until_date=until,
-        )
-        await message.reply(f"✅ Замучен на {fmt_duration(seconds)}.")
-    except Exception as e:
-        await message.reply(f"❌ Ошибка: {e}")
+    author, text, date = row
+    await message.answer(
+        f"💬 **Цитата**\n\n"
+        f"«{text}»\n\n"
+        f"— {author} ({date})"
+    )
 
-@dp.message(Command("unmute"))
-async def cmd_unmute(message: Message):
-    if not await is_chat_admin(message): return
-    target_id = await get_target_id(message)
-    if not target_id: return await message.reply("Ответь на сообщение (Reply) или напиши ID.")
+@dp.message(Command("joke"))
+async def cmd_joke(message: Message):
+    joke = random.choice(JOKES)
+    await message.answer(f"😂 {joke}")
+
+@dp.message(Command("mix"))
+async def cmd_mix(message: Message):
+    rows = get_two_quotes(message.chat.id)
+    if len(rows) < 2:
+        await message.reply("Нужно минимум 2 сохраненные цитаты для генерации шутки.")
+        return
+
+    (author1, text1), (author2, text2) = rows[0], rows[1]
     
-    try:
-        await bot.restrict_chat_member(
-            chat_id=message.chat.id,
-            user_id=target_id,
-            permissions=UNMUTE_PERMISSIONS,
-        )
-        await message.reply(f"✅ Мут снят.")
-    except Exception as e:
-        await message.reply(f"❌ Ошибка: {e}")
+    # Обрезаем слишком длинные тексты для приличия
+    text1 = text1[:50] + "..." if len(text1) > 50 else text1
+    text2 = text2[:50] + "..." if len(text2) > 50 else text2
 
-@dp.message(Command("ban"))
-async def cmd_ban(message: Message):
-    if not await is_chat_admin(message):
-        await message.reply("Только админы могут банить.")
-        return
+    templates = [
+        f"Встречаются как-то {author1} и {author2}.\n"
+        f"{author1}: «{text1}»\n"
+        f"{author2}: «{text2}»\n\n"
+        f"И тут они поняли, что это не диалог, а диагноз.",
 
-    target_id = await get_target_id(message)
-    if not target_id:
-        await message.reply("Ошибка: ответь (Reply) на сообщение нарушителя или напиши его ID.")
-        return
+        f"Новый мем из чата:\n"
+        f"«{text1}» + «{text2}» = {author1} и {author2} — легенды.",
 
-    try:
-        await bot.ban_chat_member(
-            chat_id=message.chat.id,
-            user_id=target_id,
-            revoke_messages=True,
-        )
-        await message.reply(f"✅ Забанен навсегда.")
-    except Exception as e:
-        await message.reply(f"❌ Ошибка: {e}")
+        f"Если объединить {author1} и {author2}, получится:\n"
+        f"«{text1} {text2}»\n\n"
+        f"Не пытайтесь это понять, просто смейтесь.",
 
-@dp.message(Command("unban"))
-async def cmd_unban(message: Message):
-    if not await is_chat_admin(message): return
-    target_id = await get_target_id(message)
-    if not target_id: return await message.reply("Ответь на сообщение (Reply) или напиши ID.")
+        f"Совет дня от {author1}: «{text1}».\n"
+        f"Совет дня от {author2}: «{text2}».\n"
+        f"Выбирай, кому верить.",
+    ]
 
-    try:
-        await bot.unban_chat_member(
-            chat_id=message.chat.id,
-            user_id=target_id,
-        )
-        await message.reply(f"✅ Разбанен.")
-    except Exception as e:
-        await message.reply(f"❌ Ошибка: {e}")
+    result = random.choice(templates)
+    await message.answer(f"🎭 **Шутка дня**\n\n{result}")
+
+# ========== СОХРАНЕНИЕ ВСЕХ СООБЩЕНИЙ (чтобы было больше цитат) ==========
+@dp.message(F.text)
+async def auto_save(message: Message):
+    # Можно сделать, чтобы бот сам сохранял ВСЕ сообщения (или только длинные/смешные)
+    # Сейчас по умолчанию просто пропускает, чтобы база не забивалась мусором.
+    pass
 
 async def main():
+    init_db()
     try:
         await bot.delete_webhook(drop_pending_updates=True)
-    except Exception:
+    except:
         pass
-
-    try:
-        await dp.start_polling(bot)
-    finally:
-        await bot.session.close()
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
