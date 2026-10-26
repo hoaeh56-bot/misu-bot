@@ -16,10 +16,10 @@ bot = Bot(token=config.TOKEN, session=session)
 dp = Dispatcher()
 
 DB = "stats.db"
-TARGET_CHAT_ID = -10022
 
 def init_db():
     con = sqlite3.connect(DB)
+    # Таблица для сообщений
     con.execute("""
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,16 +29,31 @@ def init_db():
             date TEXT
         )
     """)
+    # Таблица для чатов, куда надо присылать итоги
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS chats (
+            chat_id INTEGER PRIMARY KEY
+        )
+    """)
     con.commit()
     con.close()
+
+def register_chat(chat_id):
+    con = sqlite3.connect(DB)
+    con.execute("INSERT OR IGNORE INTO chats (chat_id) VALUES (?)", (chat_id,))
+    con.commit()
+    con.close()
+
+def get_all_chats():
+    con = sqlite3.connect(DB)
+    rows = con.execute("SELECT chat_id FROM chats").fetchall()
+    con.close()
+    return [row[0] for row in rows]
 
 def add_message(chat_id, user_id, user_name):
     today = datetime.now().strftime("%Y-%m-%d")
     con = sqlite3.connect(DB)
-    con.execute(
-        "INSERT INTO messages (chat_id, user_id, user_name, date) VALUES (?, ?, ?, ?)",
-        (chat_id, user_id, user_name, today)
-    )
+    con.execute("INSERT INTO messages (chat_id, user_id, user_name, date) VALUES (?, ?, ?, ?)", (chat_id, user_id, user_name, today))
     con.commit()
     con.close()
 
@@ -56,75 +71,73 @@ def get_top(chat_id):
     con.close()
     return rows
 
-def clear_old_messages():
+def clear_old():
     con = sqlite3.connect(DB)
-    con.execute("DELETE FROM messages WHERE date < date('now', '-7 days')")
+    con.execute("DELETE FROM messages WHERE date < date('now', '-2 days')")
     con.commit()
     con.close()
 
-# ========== КОМАНДЫ (ДОЛЖНЫ БЫТЬ ВЫШЕ ВСЕГО) ==========
+# --- КОМАНДЫ ---
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
-    await message.answer(
-        "Привет! Я считаю активность.\n"
-        "/top — топ-3 за сегодня\n"
-        "В 21:30 подвожу итоги!"
-    )
+    register_chat(message.chat.id) # Запоминаем чат
+    await message.answer("Бот-статистика активен!\n/top - топ за сегодня\nВ 21:30 пришлю итоги.")
 
 @dp.message(Command("top"))
 async def cmd_top(message: Message):
+    register_chat(message.chat.id)
     top = get_top(message.chat.id)
     if not top:
         await message.answer("Сегодня еще никто не писал. Будь первым!")
         return
     
     text = "🏆 Топ активности за сегодня:\n\n"
-    medals = ["🥇", "🥈", "🥉"]
-    
     for i, (name, count) in enumerate(top):
-        text += f"{medals[i]} {name} — {count} сообщений\n"
+        text += f"{i+1}. {name} — {count} сообщений\n"
         
     await message.answer(text)
 
-# ========== СЧЕТЧИК СООБЩЕНИЙ (НИЖЕ КОМАНД) ==========
+# --- СЧЕТЧИК ---
 @dp.message(F.text)
 async def count_messages(message: Message):
+    register_chat(message.chat.id) # Запоминаем любой чат, где пишут
     if message.text.startswith("/"):
         return
-    
     user = message.from_user
     name = f"@{user.username}" if user.username else user.full_name
     add_message(message.chat.id, user.id, name)
 
-# ========== АВТОМАТИЧЕСКИЙ ИТОГ В 21:30 ==========
+# --- АВТО-РАССЫЛКА В 21:30 ---
 async def daily_summary():
     while True:
         now = datetime.now()
+        # Если сейчас 21:30
         if now.hour == 21 and now.minute == 30:
-            top = get_top(TARGET_CHAT_ID)
-            if top:
-                text = "📢 Ежедневный итог в 21:30!\n\n"
-                text += "Топ-3 самых активных сегодня:\n\n"
-                medals = ["🥇 1 место", "🥈 2 место", "🥉 3 место"]
-                rewards = ["500 монет", "300 монет", "100 монет"]
-                
-                for i, (name, count) in enumerate(top):
-                    text += f"{medals[i]}: {name} (выиграл {rewards[i]})\n"
+            chats = get_all_chats()
+            for chat_id in chats:
+                top = get_top(chat_id)
+                if top:
+                    text = "📢 Ежедневный итог!\n\n"
+                    text += "Топ-3 самых активных сегодня:\n\n"
+                    rewards = ["500 монет", "300 монет", "100 монет"]
                     
-                try:
-                    await bot.send_message(TARGET_CHAT_ID, text)
-                except Exception as e:
-                    logging.error(f"Ошибка отправки итогов: {e}")
+                    for i, (name, count) in enumerate(top):
+                        text += f"{i+1} место: {name} — {count} сообщений (выиграл {rewards[i]})\n"
+                        
+                    try:
+                        await bot.send_message(chat_id, text)
+                    except Exception as e:
+                        logging.error(f"Не удалось отправить в чат {chat_id}: {e}")
             
+            # Ждем минуту, чтобы не спамить
             await asyncio.sleep(60)
         else:
             await asyncio.sleep(20)
 
 async def main():
     init_db()
-    clear_old_messages()
-    
-    asyncio.create_task(daily_summary())
+    clear_old()
+    asyncio.create_task(daily_summary()) # Запускаем таймер
     
     try:
         await bot.delete_webhook(drop_pending_updates=True)
