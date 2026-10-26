@@ -47,13 +47,12 @@ UNMUTE_PERMISSIONS = ChatPermissions(
     can_add_web_page_previews=True,
 )
 
-# ИЗМЕНЕНИЕ 1: Проверка админа теперь работает в любом чате
+
 async def is_chat_admin(message: Message) -> bool:
-    # Твой личный ID (из config.py) всегда имеет доступ
+    # Если это ты (твой ID из config.py), доступ разрешен всегда
     if message.from_user.id in config.EXTRA_ADMIN_IDS:
         return True
-        
-    # Проверяем, является ли человек админом именно в ЭТОМ чате
+    # Иначе проверяем, являешься ли ты админом именно в этом чате
     try:
         member = await bot.get_chat_member(message.chat.id, message.from_user.id)
         return member.status in ("administrator", "creator")
@@ -61,10 +60,31 @@ async def is_chat_admin(message: Message) -> bool:
         log.warning("get_chat_member failed: %s", e)
         return False
 
-def get_target(message: Message):
-    if not message.reply_to_message:
-        return None
-    return message.reply_to_message.from_user
+
+async def resolve_target(message: Message):
+    # 1. Если ответили реплаем
+    if message.reply_to_message and message.reply_to_message.from_user:
+        return message.reply_to_message.from_user
+        
+    # 2. Если написали ID или @username в тексте
+    parts = message.text.split()
+    for part in parts[1:]:
+        if part.isdigit():
+            try:
+                member = await bot.get_chat_member(message.chat.id, int(part))
+                return member.user
+            except Exception:
+                pass
+        elif part.startswith("@"):
+            username = part.replace("@", "").strip()
+            try:
+                member = await bot.get_chat_member(message.chat.id, f"@{username}")
+                return member.user
+            except Exception:
+                pass
+                
+    return None
+
 
 def parse_duration(arg: str):
     if not arg:
@@ -78,6 +98,7 @@ def parse_duration(arg: str):
         total += int(num) * units[unit]
     return total if total > 0 else None
 
+
 def fmt_duration(seconds: int) -> str:
     if seconds >= 86400:
         return f"{seconds // 86400}d"
@@ -87,22 +108,26 @@ def fmt_duration(seconds: int) -> str:
         return f"{seconds // 60}m"
     return f"{seconds}s"
 
+
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     await message.answer(
         "Bot-moderator\n\n"
         "Commands (chat admins only):\n"
         "/chatid - show chat id\n"
-        "/mute 1h - mute (reply to a message)\n"
-        "/ban - ban forever (reply)\n"
-        "/unmute - remove mute (reply)\n"
-        "/unban - unban (reply)\n\n"
+        "/mute 1h (reply) - mute\n"
+        "/mute 12345678 1h (by ID) - mute\n"
+        "/mute @user 1h (by @) - mute\n"
+        "/ban (reply or ID or @) - ban forever\n"
+        "/unmute, /unban\n\n"
         "Time: 30m, 1h, 2d, 1h30m"
     )
+
 
 @dp.message(Command("chatid"))
 async def cmd_chatid(message: Message):
     await message.answer(f"Chat ID: <code>{message.chat.id}</code>")
+
 
 @dp.message(Command("mute"))
 async def cmd_mute(message: Message):
@@ -110,13 +135,19 @@ async def cmd_mute(message: Message):
         await message.reply("Only chat admins can mute.")
         return
 
-    target = get_target(message)
+    target = await resolve_target(message)
     if not target:
-        await message.reply("Reply to a user's message with this command.")
+        await message.reply("Reply to a user, OR write user ID (123456), OR write @username.\nExample: /mute 1h")
         return
 
-    parts = message.text.split(maxsplit=1)
-    arg = parts[1].strip() if len(parts) > 1 else "1h"
+    # Ищем время в тексте, пропуская ID и @username
+    parts = message.text.split()
+    arg = "1h" # время по умолчанию
+    for part in parts[1:]:
+        if not part.isdigit() and not part.startswith("@"):
+            arg = part
+            break
+
     seconds = parse_duration(arg)
     if seconds is None:
         await message.reply("Bad duration. Examples: 30m, 1h, 2d, 1h30m")
@@ -125,7 +156,6 @@ async def cmd_mute(message: Message):
     until = datetime.now() + timedelta(seconds=seconds)
 
     try:
-        # ИЗМЕНЕНИЕ 2: Мут применяется в текущем чате
         await bot.restrict_chat_member(
             chat_id=message.chat.id,
             user_id=target.id,
@@ -137,19 +167,19 @@ async def cmd_mute(message: Message):
         log.error("mute failed: %s", e)
         await message.reply(f"Error: {e}")
 
+
 @dp.message(Command("unmute"))
 async def cmd_unmute(message: Message):
     if not await is_chat_admin(message):
         await message.reply("Only chat admins.")
         return
 
-    target = get_target(message)
+    target = await resolve_target(message)
     if not target:
-        await message.reply("Reply to a user's message.")
+        await message.reply("Reply to a user, OR write user ID (123456), OR write @username.")
         return
 
     try:
-        # ИЗМЕНЕНИЕ 3: Размут применяется в текущем чате
         await bot.restrict_chat_member(
             chat_id=message.chat.id,
             user_id=target.id,
@@ -160,19 +190,19 @@ async def cmd_unmute(message: Message):
         log.error("unmute failed: %s", e)
         await message.reply(f"Error: {e}")
 
+
 @dp.message(Command("ban"))
 async def cmd_ban(message: Message):
     if not await is_chat_admin(message):
         await message.reply("Only chat admins can ban.")
         return
 
-    target = get_target(message)
+    target = await resolve_target(message)
     if not target:
-        await message.reply("Reply to a user's message with this command.")
+        await message.reply("Reply to a user, OR write user ID (123456), OR write @username.")
         return
 
     try:
-        # ИЗМЕНЕНИЕ 4: Бан применяется в текущем чате
         await bot.ban_chat_member(
             chat_id=message.chat.id,
             user_id=target.id,
@@ -183,19 +213,19 @@ async def cmd_ban(message: Message):
         log.error("ban failed: %s", e)
         await message.reply(f"Error: {e}")
 
+
 @dp.message(Command("unban"))
 async def cmd_unban(message: Message):
     if not await is_chat_admin(message):
         await message.reply("Only chat admins.")
         return
 
-    target = get_target(message)
+    target = await resolve_target(message)
     if not target:
-        await message.reply("Reply to a user's message.")
+        await message.reply("Reply to a user, OR write user ID (123456), OR write @username.")
         return
 
     try:
-        # ИЗМЕНЕНИЕ 5: Разбан применяется в текущем чате
         await bot.unban_chat_member(
             chat_id=message.chat.id,
             user_id=target.id,
@@ -204,6 +234,7 @@ async def cmd_unban(message: Message):
     except Exception as e:
         log.error("unban failed: %s", e)
         await message.reply(f"Error: {e}")
+
 
 async def main():
     try:
@@ -215,6 +246,7 @@ async def main():
         await dp.start_polling(bot)
     finally:
         await bot.session.close()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
