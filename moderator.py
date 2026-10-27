@@ -1,12 +1,13 @@
 import asyncio
 import logging
-import sqlite3
-from datetime import datetime
+import os
+import random
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message
+from aiogram.types import Message, PreCheckoutQuery, LabeledPrice
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
+import psycopg2
 
 import config
 
@@ -15,130 +16,159 @@ session = AiohttpSession(api=TelegramAPIServer.from_base(config.API_SERVER))
 bot = Bot(token=config.TOKEN, session=session)
 dp = Dispatcher()
 
-DB = "stats.db"
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+def get_db():
+    return psycopg2.connect(DATABASE_URL)
 
 def init_db():
-    con = sqlite3.connect(DB)
-    # Таблица для сообщений
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id INTEGER,
-            user_id INTEGER,
-            user_name TEXT,
-            date TEXT
-        )
-    """)
-    # Таблица для чатов, куда надо присылать итоги
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS chats (
-            chat_id INTEGER PRIMARY KEY
+    con = get_db()
+    cur = con.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id BIGINT PRIMARY KEY,
+            username TEXT,
+            balance INTEGER DEFAULT 0
         )
     """)
     con.commit()
+    cur.close()
     con.close()
 
-def register_chat(chat_id):
-    con = sqlite3.connect(DB)
-    con.execute("INSERT OR IGNORE INTO chats (chat_id) VALUES (?)", (chat_id,))
+def get_balance(user_id):
+    con = get_db()
+    cur = con.cursor()
+    cur.execute("SELECT balance FROM users WHERE user_id = %s", (user_id,))
+    row = cur.fetchone()
+    con.close()
+    return row[0] if row else 0
+
+def change_balance(user_id, amount, username=None):
+    con = get_db()
+    cur = con.cursor()
+    cur.execute("""
+        INSERT INTO users (user_id, username, balance) VALUES (%s, %s, %s)
+        ON CONFLICT (user_id) DO UPDATE SET balance = users.balance + %s
+    """, (user_id, username, amount, amount))
     con.commit()
+    cur.close()
     con.close()
 
-def get_all_chats():
-    con = sqlite3.connect(DB)
-    rows = con.execute("SELECT chat_id FROM chats").fetchall()
-    con.close()
-    return [row[0] for row in rows]
-
-def add_message(chat_id, user_id, user_name):
-    today = datetime.now().strftime("%Y-%m-%d")
-    con = sqlite3.connect(DB)
-    con.execute("INSERT INTO messages (chat_id, user_id, user_name, date) VALUES (?, ?, ?, ?)", (chat_id, user_id, user_name, today))
-    con.commit()
-    con.close()
-
-def get_top(chat_id):
-    today = datetime.now().strftime("%Y-%m-%d")
-    con = sqlite3.connect(DB)
-    rows = con.execute("""
-        SELECT user_name, COUNT(*) as msg_count 
-        FROM messages 
-        WHERE chat_id = ? AND date = ? 
-        GROUP BY user_id 
-        ORDER BY msg_count DESC 
-        LIMIT 3
-    """, (chat_id, today)).fetchall()
-    con.close()
-    return rows
-
-def clear_old():
-    con = sqlite3.connect(DB)
-    con.execute("DELETE FROM messages WHERE date < date('now', '-2 days')")
-    con.commit()
-    con.close()
-
-# --- КОМАНДЫ ---
+# ========== КОМАНДЫ ==========
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
-    register_chat(message.chat.id) # Запоминаем чат
-    await message.answer("Бот-статистика активен!\n/top - топ за сегодня\nВ 21:30 пришлю итоги.")
+    change_balance(message.from_user.id, 0, message.from_user.username) # создаем профиль в базе
+    await message.answer(
+        "Привет! Я бот с кейсами.\n\n"
+        "/profile - твой профиль и баланс\n"
+        "/buy 100 - купить 100 тыкв за Stars 🎃\n"
+        "/case - открыть кейс"
+    )
 
-@dp.message(Command("top"))
-async def cmd_top(message: Message):
-    register_chat(message.chat.id)
-    top = get_top(message.chat.id)
-    if not top:
-        await message.answer("Сегодня еще никто не писал. Будь первым!")
+@dp.message(Command("profile"))
+async def cmd_profile(message: Message):
+    user_id = message.from_user.id
+    username = message.from_user.username
+    first_name = message.from_user.first_name
+    
+    bal = get_balance(user_id)
+    
+    text = (
+        f"👤 <b>Профиль пользователя</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"<b>Имя:</b> {first_name}\n"
+        f"<b>Юзернейм:</b> @{username if username else 'нет'}\n"
+        f"<b>ID:</b> <code>{user_id}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🎃 <b>Баланс:</b> {bal} тыкв\n\n"
+        f"<i>Этот же баланс отображается на нашем сайте!</i>"
+    )
+    
+    await message.answer(text, parse_mode="HTML")
+
+@dp.message(Command("balance"))
+async def cmd_balance(message: Message):
+    bal = get_balance(message.from_user.id)
+    await message.answer(f"Твой баланс: {bal} тыкв 🎃.")
+
+# ========== ПОКУПКА ЗА STARS ==========
+@dp.message(Command("buy"))
+async def cmd_buy(message: Message):
+    parts = message.text.split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.answer("Напиши количество: /buy 100")
         return
     
-    text = "🏆 Топ активности за сегодня:\n\n"
-    for i, (name, count) in enumerate(top):
-        text += f"{i+1}. {name} — {count} сообщений\n"
-        
-    await message.answer(text)
-
-# --- СЧЕТЧИК ---
-@dp.message(F.text)
-async def count_messages(message: Message):
-    register_chat(message.chat.id) # Запоминаем любой чат, где пишут
-    if message.text.startswith("/"):
+    amount = int(parts[1])
+    if amount < 10:
+        await message.answer("Минимум 10 тыкв.")
         return
-    user = message.from_user
-    name = f"@{user.username}" if user.username else user.full_name
-    add_message(message.chat.id, user.id, name)
 
-# --- АВТО-РАССЫЛКА В 21:30 ---
-async def daily_summary():
-    while True:
-        now = datetime.now()
-        # Если сейчас 21:30
-        if now.hour == 21 and now.minute == 30:
-            chats = get_all_chats()
-            for chat_id in chats:
-                top = get_top(chat_id)
-                if top:
-                    text = "📢 Ежедневный итог!\n\n"
-                    text += "Топ-3 самых активных сегодня:\n\n"
-                    rewards = ["500 монет", "300 монет", "100 монет"]
-                    
-                    for i, (name, count) in enumerate(top):
-                        text += f"{i+1} место: {name} — {count} сообщений (выиграл {rewards[i]})\n"
-                        
-                    try:
-                        await bot.send_message(chat_id, text)
-                    except Exception as e:
-                        logging.error(f"Не удалось отправить в чат {chat_id}: {e}")
-            
-            # Ждем минуту, чтобы не спамить
-            await asyncio.sleep(60)
-        else:
-            await asyncio.sleep(20)
+    # 1 тыква = 0.5 звезды (например, 50 звезд = 100 тыкв)
+    stars_price = int(amount * 0.5)
+
+    await message.answer_invoice(
+        title=f"Покупка {amount} тыкв 🎃",
+        description=f"Покупка {amount} тыкв за {stars_price} звёзд.",
+        payload=f"buy_{amount}",
+        provider_token="", 
+        currency="XTR", 
+        prices=[LabeledPrice(label="XTR", amount=stars_price)],
+    )
+
+@dp.pre_checkout_query()
+async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery):
+    await pre_checkout_query.answer(ok=True)
+
+@dp.message(F.successful_payment)
+async def success_payment(message: Message):
+    payload = message.successful_payment.invoice_payload
+    amount = int(payload.split("_")[1])
+    
+    # Начисляем баланс
+    change_balance(message.from_user.id, amount)
+    new_bal = get_balance(message.from_user.id)
+    
+    await message.answer(
+        f"✅ Оплата прошла успешно!\n"
+        f"Тебе начислено {amount} тыкв 🎃\n\n"
+        f"Твой баланс: {new_bal} тыкв."
+    )
+
+# ========== КЕЙСЫ ==========
+@dp.message(Command("case"))
+async def cmd_case(message: Message):
+    price = 100
+    if get_balance(message.from_user.id) < price:
+        await message.answer("Недостаточно тыкв! Купи их: /buy 100")
+        return
+    
+    # Списываем цену кейса
+    change_balance(message.from_user.id, -price)
+    
+    # Список предметов: (Название, Эмодзи, Шанс, Ценность)
+    items = [
+        ("Конфета", "🍬", 50, 10),
+        ("Тыква", "🎃", 30, 20),
+        ("Призрак", "👻", 15, 50),
+        ("Демон", "😈", 5, 100),
+    ]
+    
+    # Рандом с учетом шансов
+    item = random.choices(items, weights=[i[2] for i in items], k=1)[0]
+    
+    # Начисляем выигрыш
+    change_balance(message.from_user.id, item[3])
+    new_bal = get_balance(message.from_user.id)
+    
+    await message.answer(
+        f"Ты открыл кейс!\n\n"
+        f"{item[1]} {item[0]} (выигрыш: {item[3]} тыкв)\n\n"
+        f"Баланс: {new_bal} тыкв."
+    )
 
 async def main():
     init_db()
-    clear_old()
-    asyncio.create_task(daily_summary()) # Запускаем таймер
-    
     try:
         await bot.delete_webhook(drop_pending_updates=True)
     except:
