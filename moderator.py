@@ -8,6 +8,7 @@ from aiogram.types import Message, PreCheckoutQuery, LabeledPrice
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 import psycopg2
+from urllib.parse import urlparse, urlunparse
 
 import config
 
@@ -16,14 +17,27 @@ session = AiohttpSession(api=TelegramAPIServer.from_base(config.API_SERVER))
 bot = Bot(token=config.TOKEN, session=session)
 dp = Dispatcher()
 
-# ЖЕСТКО ПРОПИСАННАЯ ССЫЛКА (на случай, если Render глючит)
-DATABASE_URL = os.environ.get(
+# Берем переменную из Render
+_raw_url = os.environ.get(
     "DATABASE_URL", 
     "postgresql://postgres:22E%23bS%23aMcN%40L6A@db.ptcofqwsvyytcnoerazu.supabase.co:5432/postgres?sslmode=require"
 )
 
-# Проверка в логах, что ссылка подхватилась
-logging.info(f"Подключение к базе: {DATABASE_URL[:20]}...")
+# ХАК: Автоматически меняем прямой адрес на пулер (чтобы Render мог подключиться)
+def fix_db_url(url):
+    # Если ссылка уже с пулером - оставляем как есть
+    if "pooler.supabase.com" in url:
+        return url
+    
+    # Меняем db.xxx.supabase.co на aws-0-eu-north-1.pooler.supabase.com
+    # и порт 5432 на 6543
+    url = url.replace("db.ptcofqwsvyytcnoerazu.supabase.co:5432", "aws-0-eu-north-1.pooler.supabase.com:6543")
+    url = url.replace("postgres:22E%23bS%23aMcN%40L6A@", "postgres.ptcofqwsvyytcnoerazu:22E%23bS%23aMcN%40L6A@")
+    
+    return url
+
+DATABASE_URL = fix_db_url(_raw_url)
+logging.info(f"Используемый URL для БД: {DATABASE_URL[:30]}...")
 
 def get_db():
     return psycopg2.connect(DATABASE_URL)
