@@ -16,7 +16,14 @@ session = AiohttpSession(api=TelegramAPIServer.from_base(config.API_SERVER))
 bot = Bot(token=config.TOKEN, session=session)
 dp = Dispatcher()
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
+# ЖЕСТКО ПРОПИСАННАЯ ССЫЛКА (на случай, если Render глючит)
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL", 
+    "postgresql://postgres:22E%23bS%23aMcN%40L6A@db.ptcofqwsvyytcnoerazu.supabase.co:5432/postgres?sslmode=require"
+)
+
+# Проверка в логах, что ссылка подхватилась
+logging.info(f"Подключение к базе: {DATABASE_URL[:20]}...")
 
 def get_db():
     return psycopg2.connect(DATABASE_URL)
@@ -57,7 +64,7 @@ def change_balance(user_id, amount, username=None):
 # ========== КОМАНДЫ ==========
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
-    change_balance(message.from_user.id, 0, message.from_user.username) # создаем профиль в базе
+    change_balance(message.from_user.id, 0, message.from_user.username)
     await message.answer(
         "Привет! Я бот с кейсами.\n\n"
         "/profile - твой профиль и баланс\n"
@@ -71,7 +78,11 @@ async def cmd_profile(message: Message):
     username = message.from_user.username
     first_name = message.from_user.first_name
     
-    bal = get_balance(user_id)
+    try:
+        bal = get_balance(user_id)
+    except Exception as e:
+        await message.answer(f"Ошибка базы: {e}")
+        return
     
     text = (
         f"👤 <b>Профиль пользователя</b>\n"
@@ -104,7 +115,6 @@ async def cmd_buy(message: Message):
         await message.answer("Минимум 10 тыкв.")
         return
 
-    # 1 тыква = 0.5 звезды (например, 50 звезд = 100 тыкв)
     stars_price = int(amount * 0.5)
 
     await message.answer_invoice(
@@ -125,7 +135,6 @@ async def success_payment(message: Message):
     payload = message.successful_payment.invoice_payload
     amount = int(payload.split("_")[1])
     
-    # Начисляем баланс
     change_balance(message.from_user.id, amount)
     new_bal = get_balance(message.from_user.id)
     
@@ -143,10 +152,8 @@ async def cmd_case(message: Message):
         await message.answer("Недостаточно тыкв! Купи их: /buy 100")
         return
     
-    # Списываем цену кейса
     change_balance(message.from_user.id, -price)
     
-    # Список предметов: (Название, Эмодзи, Шанс, Ценность)
     items = [
         ("Конфета", "🍬", 50, 10),
         ("Тыква", "🎃", 30, 20),
@@ -154,10 +161,7 @@ async def cmd_case(message: Message):
         ("Демон", "😈", 5, 100),
     ]
     
-    # Рандом с учетом шансов
     item = random.choices(items, weights=[i[2] for i in items], k=1)[0]
-    
-    # Начисляем выигрыш
     change_balance(message.from_user.id, item[3])
     new_bal = get_balance(message.from_user.id)
     
