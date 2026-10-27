@@ -15,10 +15,12 @@ session = AiohttpSession(api=TelegramAPIServer.from_base(config.API_SERVER))
 bot = Bot(token=config.TOKEN, session=session)
 dp = Dispatcher()
 
-# Твоя ссылка на базу (с пулером)
+# =========================================================
+# ССЫЛКА НА БАЗУ (Session Pooler - работает на Render)
+# =========================================================
 DATABASE_URL = os.environ.get(
     "DATABASE_URL", 
-    "postgresql://postgres.ptcofqwsvyytcnoerazu:22E%23bS%23aMcN%40L6A@aws-0-eu-north-1.pooler.supabase.com:6543/postgres"
+    "postgresql://postgres.ptcofqwsvyytcnoerazu:22E%23bS%23aMcN%40L6A@aws-0-eu-north-1.pooler.supabase.com:5432/postgres"
 )
 
 def get_db():
@@ -60,10 +62,9 @@ def change_balance(user_id, amount, username=None):
 # ========== КОМАНДЫ ==========
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
-    change_balance(message.from_user.id, 0, message.from_user.username) # Создаем юзера
+    change_balance(message.from_user.id, 0, message.from_user.username)
     
-    # СОЗДАЕМ КНОПКУ ДЛЯ МИНИ-АППА
-    # ВАЖНО: Ссылка должна быть https (у тебя Vercel, так что всё ок)
+    # Кнопка для открытия Мини-Аппа
     web_app_url = "https://misu-site.vercel.app/" 
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -103,6 +104,7 @@ async def cmd_buy(message: Message):
         await message.answer("Минимум 10 тыкв.")
         return
 
+    # Курс: 100 тыкв = 550 звезд (т.е. 5.5 за штуку)
     stars_price = int(amount * 5.5)
 
     await message.answer_invoice(
