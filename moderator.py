@@ -1,14 +1,12 @@
 import asyncio
 import logging
 import os
-import random
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message, PreCheckoutQuery, LabeledPrice
+from aiogram.types import Message, PreCheckoutQuery, LabeledPrice, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 import psycopg2
-from urllib.parse import urlparse, urlunparse
 
 import config
 
@@ -17,27 +15,11 @@ session = AiohttpSession(api=TelegramAPIServer.from_base(config.API_SERVER))
 bot = Bot(token=config.TOKEN, session=session)
 dp = Dispatcher()
 
-# Берем переменную из Render
-_raw_url = os.environ.get(
+# Твоя ссылка на базу (с пулером)
+DATABASE_URL = os.environ.get(
     "DATABASE_URL", 
-    "postgresql://postgres:22E%23bS%23aMcN%40L6A@db.ptcofqwsvyytcnoerazu.supabase.co:5432/postgres?sslmode=require"
+    "postgresql://postgres.ptcofqwsvyytcnoerazu:22E%23bS%23aMcN%40L6A@aws-0-eu-north-1.pooler.supabase.com:6543/postgres"
 )
-
-# ХАК: Автоматически меняем прямой адрес на пулер (чтобы Render мог подключиться)
-def fix_db_url(url):
-    # Если ссылка уже с пулером - оставляем как есть
-    if "pooler.supabase.com" in url:
-        return url
-    
-    # Меняем db.xxx.supabase.co на aws-0-eu-north-1.pooler.supabase.com
-    # и порт 5432 на 6543
-    url = url.replace("db.ptcofqwsvyytcnoerazu.supabase.co:5432", "aws-0-eu-north-1.pooler.supabase.com:6543")
-    url = url.replace("postgres:22E%23bS%23aMcN%40L6A@", "postgres.ptcofqwsvyytcnoerazu:22E%23bS%23aMcN%40L6A@")
-    
-    return url
-
-DATABASE_URL = fix_db_url(_raw_url)
-logging.info(f"Используемый URL для БД: {DATABASE_URL[:30]}...")
 
 def get_db():
     return psycopg2.connect(DATABASE_URL)
@@ -78,43 +60,35 @@ def change_balance(user_id, amount, username=None):
 # ========== КОМАНДЫ ==========
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
-    change_balance(message.from_user.id, 0, message.from_user.username)
+    change_balance(message.from_user.id, 0, message.from_user.username) # Создаем юзера
+    
+    # СОЗДАЕМ КНОПКУ ДЛЯ МИНИ-АППА
+    # ВАЖНО: Ссылка должна быть https (у тебя Vercel, так что всё ок)
+    web_app_url = "https://misu-site.vercel.app/" 
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎃 Открыть игру", web_app=WebAppInfo(url=web_app_url))]
+    ])
+    
     await message.answer(
-        "Привет! Я бот с кейсами.\n\n"
-        "/profile - твой профиль и баланс\n"
-        "/buy 100 - купить 100 тыкв за Stars 🎃\n"
-        "/case - открыть кейс"
+        "Привет! Это бот для пополнения баланса.\n\n"
+        "/profile - узнать свой ID и баланс\n"
+        "/buy 100 - купить 100 тыкв за Stars 🎃\n\n"
+        "Жми кнопку ниже, чтобы открыть кейсы!",
+        reply_markup=kb
     )
 
 @dp.message(Command("profile"))
 async def cmd_profile(message: Message):
     user_id = message.from_user.id
-    username = message.from_user.username
-    first_name = message.from_user.first_name
-    
-    try:
-        bal = get_balance(user_id)
-    except Exception as e:
-        await message.answer(f"Ошибка базы: {e}")
-        return
+    bal = get_balance(user_id)
     
     text = (
-        f"👤 <b>Профиль пользователя</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"<b>Имя:</b> {first_name}\n"
-        f"<b>Юзернейм:</b> @{username if username else 'нет'}\n"
-        f"<b>ID:</b> <code>{user_id}</code>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"🎃 <b>Баланс:</b> {bal} тыкв\n\n"
-        f"<i>Этот же баланс отображается на нашем сайте!</i>"
+        f"👤 <b>Твой профиль</b>\n\n"
+        f"ID (для сайта): <code>{user_id}</code>\n"
+        f"Баланс: <b>{bal}</b> тыкв 🎃"
     )
-    
     await message.answer(text, parse_mode="HTML")
-
-@dp.message(Command("balance"))
-async def cmd_balance(message: Message):
-    bal = get_balance(message.from_user.id)
-    await message.answer(f"Твой баланс: {bal} тыкв 🎃.")
 
 # ========== ПОКУПКА ЗА STARS ==========
 @dp.message(Command("buy"))
@@ -129,10 +103,10 @@ async def cmd_buy(message: Message):
         await message.answer("Минимум 10 тыкв.")
         return
 
-    stars_price = int(amount * 0.5)
+    stars_price = int(amount * 5.5)
 
     await message.answer_invoice(
-        title=f"Покупка {amount} тыкв 🎃",
+        title=f"Покупка {amount} тыкв",
         description=f"Покупка {amount} тыкв за {stars_price} звёзд.",
         payload=f"buy_{amount}",
         provider_token="", 
@@ -155,34 +129,7 @@ async def success_payment(message: Message):
     await message.answer(
         f"✅ Оплата прошла успешно!\n"
         f"Тебе начислено {amount} тыкв 🎃\n\n"
-        f"Твой баланс: {new_bal} тыкв."
-    )
-
-# ========== КЕЙСЫ ==========
-@dp.message(Command("case"))
-async def cmd_case(message: Message):
-    price = 100
-    if get_balance(message.from_user.id) < price:
-        await message.answer("Недостаточно тыкв! Купи их: /buy 100")
-        return
-    
-    change_balance(message.from_user.id, -price)
-    
-    items = [
-        ("Конфета", "🍬", 50, 10),
-        ("Тыква", "🎃", 30, 20),
-        ("Призрак", "👻", 15, 50),
-        ("Демон", "😈", 5, 100),
-    ]
-    
-    item = random.choices(items, weights=[i[2] for i in items], k=1)[0]
-    change_balance(message.from_user.id, item[3])
-    new_bal = get_balance(message.from_user.id)
-    
-    await message.answer(
-        f"Ты открыл кейс!\n\n"
-        f"{item[1]} {item[0]} (выигрыш: {item[3]} тыкв)\n\n"
-        f"Баланс: {new_bal} тыкв."
+        f"Твой новый баланс: {new_bal} тыкв."
     )
 
 async def main():
