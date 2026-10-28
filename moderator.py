@@ -15,7 +15,6 @@ session = AiohttpSession(api=TelegramAPIServer.from_base(config.API_SERVER))
 bot = Bot(token=config.TOKEN, session=session)
 dp = Dispatcher()
 
-# ТВОЙ ID ДЛЯ ПОЛУЧЕНИЯ ЗАЯВОК НА ВЫВОД
 ADMIN_ID = 1780243205 
 
 DATABASE_URL = os.environ.get(
@@ -56,7 +55,6 @@ def change_balance(user_id, amount, username=None):
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     change_balance(message.from_user.id, 0, message.from_user.username)
-    # Передаем ID игрока в ссылку
     web_app_url = f"https://misu-site.vercel.app/?user_id={message.from_user.id}"
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎃 Открыть игру", web_app=WebAppInfo(url=web_app_url))]
@@ -148,7 +146,6 @@ async def start_web_server():
 
 async def main():
     init_db()
-    # Запускаем веб-сервер параллельно с ботом
     asyncio.create_task(start_web_server())
     
     try:
