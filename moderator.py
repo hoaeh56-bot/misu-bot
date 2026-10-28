@@ -26,9 +26,24 @@ DATABASE_URL = os.environ.get(
     "postgresql://postgres.ptcofqwsvyytcnoerazu:22E%23bS%23aMcN%40L6A@aws-0-eu-north-1.pooler.supabase.com:5432/postgres"
 )
 
+GIFTS = [
+    {"id": "9000000000000151", "name": "Мишка", "stars": 15},
+    {"id": "9000000000000148", "name": "Сердечко", "stars": 15},
+    {"id": "9000000000000152", "name": "Подарок", "stars": 25},
+    {"id": "9000000000000153", "name": "Роза", "stars": 25},
+    {"id": "9000000000000154", "name": "Торт", "stars": 50},
+    {"id": "9000000000000155", "name": "Букет", "stars": 50},
+    {"id": "9000000000000156", "name": "Ракета", "stars": 50},
+    {"id": "9000000000000160", "name": "Шампанское", "stars": 50},
+    {"id": "9000000000000157", "name": "Кубок", "stars": 100},
+    {"id": "9000000000000158", "name": "Кольцо", "stars": 100},
+    {"id": "9000000000000159", "name": "Алмаз", "stars": 100},
+]
+
 class AdminStates(StatesGroup):
     waiting_for_id = State()
     waiting_for_amount = State()
+    waiting_for_gift_price = State()
 
 def get_db():
     return psycopg2.connect(DATABASE_URL)
@@ -36,7 +51,7 @@ def get_db():
 def init_db():
     con = get_db()
     cur = con.cursor()
-    cur.execute("CREATE TABLE IF NOT EXISTS users (user_id BIGINT PRIMARY KEY, username TEXT, balance INTEGER DEFAULT 0)")
+    cur.execute("CREATE TABLE IF NOT EXISTS users (user_id BIGINT PRIMARY KEY, username TEXT, balance INTEGER DEFAULT 0, last_free_case TIMESTAMP)")
     con.commit()
     cur.close()
     con.close()
@@ -65,7 +80,14 @@ def change_balance(user_id, amount, username=None):
     cur.close()
     con.close()
 
-# === ПРОВЕРКА ЗАЯВОК НА ВЫВОД ===
+def get_all_users():
+    con = get_db()
+    cur = con.cursor()
+    cur.execute("SELECT user_id FROM users")
+    rows = cur.fetchall()
+    con.close()
+    return [row[0] for row in rows]
+
 async def check_withdrawals():
     while True:
         try:
@@ -78,22 +100,17 @@ async def check_withdrawals():
                 w_id, u_id, item_name = row
                 await bot.send_message(
                     ADMIN_ID,
-                    f"📦 <b>ЗАЯВКА НА ВЫВОД!</b>\n\n"
-                    f"Игрок (ID): <code>{u_id}</code>\n"
-                    f"Предмет: <b>{item_name}</b>",
+                    f"📦 <b>ЗАЯВКА НА ВЫВОД!</b>\n\nИгрок (ID): <code>{u_id}</code>\nПредмет: <b>{item_name}</b>",
                     parse_mode="HTML"
                 )
                 cur.execute("UPDATE withdrawals SET status = 'done' WHERE id = %s", (w_id,))
                 con.commit()
-            
             cur.close()
             con.close()
         except Exception as e:
-            logging.error(f"Ошибка проверки заявок: {e}")
-        
+            logging.error(f"Ошибка: {e}")
         await asyncio.sleep(5)
 
-# === КОМАНДЫ ===
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     change_balance(message.from_user.id, 0, message.from_user.username)
@@ -108,12 +125,12 @@ async def cmd_profile(message: Message):
     bal = get_balance(message.from_user.id)
     await message.answer(f"👤 Твой ID: <code>{message.from_user.id}</code>\nБаланс: <b>{bal}</b> тыкв 🎃", parse_mode="HTML")
 
-# === АДМИН ПАНЕЛЬ ===
 @dp.message(Command("admin"))
 async def cmd_admin(message: Message):
     if message.from_user.id != ADMIN_ID: return
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💰 Выдать / Забрать тыквы", callback_data="admin_give")]
+        [InlineKeyboardButton(text="💰 Выдать / Забрать тыквы", callback_data="admin_give")],
+        [InlineKeyboardButton(text="🎁 Выдать подарок всем", callback_data="admin_gift")]
     ])
     await message.answer("🛠 <b>Админ-панель</b>", reply_markup=kb, parse_mode="HTML")
 
@@ -128,24 +145,52 @@ async def admin_process_id(message: Message, state: FSMContext):
     if not message.text.isdigit(): return await message.answer("Только цифры.")
     await state.update_data(target_id=int(message.text))
     await state.set_state(AdminStates.waiting_for_amount)
-    await message.answer("Сколько <b>тыкв</b> выдать? (Чтобы забрать, напиши с минусом, например: -500)")
+    await message.answer("Сколько <b>тыкв</b>? (Минус, чтобы забрать)")
 
 @dp.message(AdminStates.waiting_for_amount)
 async def admin_process_amount(message: Message, state: FSMContext):
     try:
         amount = int(message.text)
     except ValueError: return await message.answer("Нужно число.")
-
     data = await state.get_data()
     target_id = data['target_id']
-    
     change_balance(target_id, amount)
     new_bal = get_balance(target_id)
-    
     await state.clear()
-    await message.answer(f"✅ Игроку <code>{target_id}</code> изменен баланс на <b>{amount}</b> 🎃\nЕго баланс: <b>{new_bal}</b> 🎃", parse_mode="HTML")
+    await message.answer(f"✅ Баланс <code>{target_id}</code> изменен на <b>{amount}</b> 🎃\nЕго баланс: <b>{new_bal}</b>", parse_mode="HTML")
 
-# Покупка и прочее
+@dp.callback_query(F.data == "admin_gift")
+async def admin_gift_callback(call: Message, state: FSMContext):
+    if call.from_user.id != ADMIN_ID: return
+    await call.message.edit_text("Сколько <b>звезд</b> должен стоить подарок? (15, 25, 50, 100)")
+    await state.set_state(AdminStates.waiting_for_gift_price)
+
+@dp.message(AdminStates.waiting_for_gift_price)
+async def admin_process_gift_price(message: Message, state: FSMContext):
+    try:
+        price = int(message.text)
+    except ValueError: return await message.answer("Нужно число.")
+    suitable = [g for g in GIFTS if g["stars"] == price]
+    if not suitable: 
+        await state.clear()
+        return await message.answer("Нет подарка за такую цену.")
+    gift = random.choice(suitable)
+    users = get_all_users()
+    if not users:
+        await state.clear()
+        return await message.answer("Нет игроков.")
+    await message.answer(f"🎁 Раздаю «{gift['name']}» на {len(users)} игроков...")
+    success = 0
+    for uid in users:
+        try:
+            await bot.send_gift(user_id=uid, gift_id=gift["id"])
+            success += 1
+            await asyncio.sleep(0.15)
+        except Exception as e:
+            pass
+    await state.clear()
+    await message.answer(f"✅ Успешно: {success}/{len(users)}")
+
 @dp.message(Command("buy"))
 async def cmd_buy(message: Message):
     parts = message.text.split()
@@ -177,7 +222,6 @@ async def main():
     init_db()
     asyncio.create_task(start_web_server())
     asyncio.create_task(check_withdrawals())
-    
     try: await bot.delete_webhook(drop_pending_updates=True)
     except: pass
     await dp.start_polling(bot)
