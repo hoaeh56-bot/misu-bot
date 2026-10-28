@@ -26,6 +26,7 @@ DATABASE_URL = os.environ.get(
     "postgresql://postgres.ptcofqwsvyytcnoerazu:22E%23bS%23aMcN%40L6A@aws-0-eu-north-1.pooler.supabase.com:5432/postgres"
 )
 
+# ТВОИ ПОДАРКИ
 GIFTS = [
     {"id": "9000000000000151", "name": "Мишка", "stars": 15},
     {"id": "9000000000000148", "name": "Сердечко", "stars": 15},
@@ -88,29 +89,43 @@ def get_all_users():
     con.close()
     return [row[0] for row in rows]
 
+# === УВЕДОМЛЕНИЯ О ВЫВОДЕ ===
 async def check_withdrawals():
+    logging.info("Запущен цикл проверки заявок на вывод...")
     while True:
         try:
             con = get_db()
             cur = con.cursor()
+            # Берем одну заявку, которую еще не отправляли
             cur.execute("SELECT id, user_id, item_name FROM withdrawals WHERE status = 'pending' LIMIT 1")
             row = cur.fetchone()
             
             if row:
                 w_id, u_id, item_name = row
+                logging.info(f"Найдена заявка: ID {u_id}, предмет {item_name}")
+                
+                # Отправляем тебе
                 await bot.send_message(
                     ADMIN_ID,
-                    f"📦 <b>ЗАЯВКА НА ВЫВОД!</b>\n\nИгрок (ID): <code>{u_id}</code>\nПредмет: <b>{item_name}</b>",
+                    f"📦 <b>ЗАЯВКА НА ВЫВОД!</b>\n\n"
+                    f"Игрок (ID): <code>{u_id}</code>\n"
+                    f"Предмет: <b>{item_name}</b>",
                     parse_mode="HTML"
                 )
+                
+                # Ставим статус done, чтобы больше не отправлять
                 cur.execute("UPDATE withdrawals SET status = 'done' WHERE id = %s", (w_id,))
                 con.commit()
+                logging.info(f"Заявка {w_id} обработана и отправлена админу.")
+            
             cur.close()
             con.close()
         except Exception as e:
-            logging.error(f"Ошибка: {e}")
-        await asyncio.sleep(5)
+            logging.error(f"Ошибка проверки заявок: {e}")
+        
+        await asyncio.sleep(3) # Проверяем каждые 3 секунды
 
+# === КОМАНДЫ ===
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     change_balance(message.from_user.id, 0, message.from_user.username)
@@ -221,7 +236,8 @@ async def start_web_server():
 async def main():
     init_db()
     asyncio.create_task(start_web_server())
-    asyncio.create_task(check_withdrawals())
+    asyncio.create_task(check_withdrawals()) # Запускаем проверку заявок
+    
     try: await bot.delete_webhook(drop_pending_updates=True)
     except: pass
     await dp.start_polling(bot)
