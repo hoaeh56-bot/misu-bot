@@ -1,13 +1,13 @@
 import asyncio
 import logging
 import os
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message, PreCheckoutQuery, LabeledPrice, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 import psycopg2
-
 import config
 
 logging.basicConfig(level=logging.INFO)
@@ -56,6 +56,7 @@ def change_balance(user_id, amount, username=None):
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     change_balance(message.from_user.id, 0, message.from_user.username)
+    # Передаем ID игрока в ссылку
     web_app_url = f"https://misu-site.vercel.app/?user_id={message.from_user.id}"
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎃 Открыть игру", web_app=WebAppInfo(url=web_app_url))]
@@ -119,7 +120,6 @@ async def web_app_data_handler(message: Message):
             item_name = data.get("item_name")
             user_id = data.get("user_id")
             
-            # Отправляем тебе уведомление
             await bot.send_message(
                 ADMIN_ID,
                 f"📦 <b>Запрос на вывод!</b>\n\n"
@@ -132,8 +132,25 @@ async def web_app_data_handler(message: Message):
     except Exception as e:
         logging.error(f"Ошибка обработки web_app_data: {e}")
 
+# === ЗАГЛУШКА ДЛЯ RENDER (чтобы не вырубался) ===
+async def handle_ping(request):
+    return web.Response(text="Bot is running")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get('PORT', 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logging.info(f"Web server started on port {port}")
+
 async def main():
     init_db()
+    # Запускаем веб-сервер параллельно с ботом
+    asyncio.create_task(start_web_server())
+    
     try:
         await bot.delete_webhook(drop_pending_updates=True)
     except:
