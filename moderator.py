@@ -26,19 +26,9 @@ DATABASE_URL = os.environ.get(
     "postgresql://postgres.ptcofqwsvyytcnoerazu:22E%23bS%23aMcN%40L6A@aws-0-eu-north-1.pooler.supabase.com:5432/postgres"
 )
 
-GIFTS = [
-    {"id": "9000000000000151", "name": "Мишка", "stars": 15},
-    {"id": "9000000000000148", "name": "Сердечко", "stars": 15},
-    {"id": "9000000000000152", "name": "Подарок", "stars": 25},
-    {"id": "9000000000000153", "name": "Роза", "stars": 25},
-    {"id": "9000000000000154", "name": "Торт", "stars": 50},
-    {"id": "9000000000000155", "name": "Букет", "stars": 50},
-    {"id": "9000000000000156", "name": "Ракета", "stars": 50},
-    {"id": "9000000000000160", "name": "Шампанское", "stars": 50},
-    {"id": "9000000000000157", "name": "Кубок", "stars": 100},
-    {"id": "9000000000000158", "name": "Кольцо", "stars": 100},
-    {"id": "9000000000000159", "name": "Алмаз", "stars": 100},
-]
+class AdminStates(StatesGroup):
+    waiting_for_id = State()
+    waiting_for_amount = State()
 
 def get_db():
     return psycopg2.connect(DATABASE_URL)
@@ -75,14 +65,6 @@ def change_balance(user_id, amount, username=None):
     cur.close()
     con.close()
 
-def get_all_users():
-    con = get_db()
-    cur = con.cursor()
-    cur.execute("SELECT user_id FROM users")
-    rows = cur.fetchall()
-    con.close()
-    return [row[0] for row in rows]
-
 # === ПРОВЕРКА ЗАЯВОК НА ВЫВОД ===
 async def check_withdrawals():
     while True:
@@ -96,10 +78,9 @@ async def check_withdrawals():
                 w_id, u_id, item_name = row
                 await bot.send_message(
                     ADMIN_ID,
-                    f"📦 <b>НОВАЯ ЗАЯВКА НА ВЫВОД!</b>\n\n"
-                    f"🎮 Игрок (ID): <code>{u_id}</code>\n"
-                    f"🎁 Предмет: <b>{item_name}</b>\n\n"
-                    f"Свяжись с игроком для выдачи.",
+                    f"📦 <b>ЗАЯВКА НА ВЫВОД!</b>\n\n"
+                    f"Игрок (ID): <code>{u_id}</code>\n"
+                    f"Предмет: <b>{item_name}</b>",
                     parse_mode="HTML"
                 )
                 cur.execute("UPDATE withdrawals SET status = 'done' WHERE id = %s", (w_id,))
@@ -110,7 +91,7 @@ async def check_withdrawals():
         except Exception as e:
             logging.error(f"Ошибка проверки заявок: {e}")
         
-        await asyncio.sleep(5) 
+        await asyncio.sleep(5)
 
 # === КОМАНДЫ ===
 @dp.message(CommandStart())
@@ -127,6 +108,44 @@ async def cmd_profile(message: Message):
     bal = get_balance(message.from_user.id)
     await message.answer(f"👤 Твой ID: <code>{message.from_user.id}</code>\nБаланс: <b>{bal}</b> тыкв 🎃", parse_mode="HTML")
 
+# === АДМИН ПАНЕЛЬ ===
+@dp.message(Command("admin"))
+async def cmd_admin(message: Message):
+    if message.from_user.id != ADMIN_ID: return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💰 Выдать / Забрать тыквы", callback_data="admin_give")]
+    ])
+    await message.answer("🛠 <b>Админ-панель</b>", reply_markup=kb, parse_mode="HTML")
+
+@dp.callback_query(F.data == "admin_give")
+async def admin_give_callback(call: Message, state: FSMContext):
+    if call.from_user.id != ADMIN_ID: return
+    await call.message.edit_text("Введи <b>ID игрока</b>:")
+    await state.set_state(AdminStates.waiting_for_id)
+
+@dp.message(AdminStates.waiting_for_id)
+async def admin_process_id(message: Message, state: FSMContext):
+    if not message.text.isdigit(): return await message.answer("Только цифры.")
+    await state.update_data(target_id=int(message.text))
+    await state.set_state(AdminStates.waiting_for_amount)
+    await message.answer("Сколько <b>тыкв</b> выдать? (Чтобы забрать, напиши с минусом, например: -500)")
+
+@dp.message(AdminStates.waiting_for_amount)
+async def admin_process_amount(message: Message, state: FSMContext):
+    try:
+        amount = int(message.text)
+    except ValueError: return await message.answer("Нужно число.")
+
+    data = await state.get_data()
+    target_id = data['target_id']
+    
+    change_balance(target_id, amount)
+    new_bal = get_balance(target_id)
+    
+    await state.clear()
+    await message.answer(f"✅ Игроку <code>{target_id}</code> изменен баланс на <b>{amount}</b> 🎃\nЕго баланс: <b>{new_bal}</b> 🎃", parse_mode="HTML")
+
+# Покупка и прочее
 @dp.message(Command("buy"))
 async def cmd_buy(message: Message):
     parts = message.text.split()
@@ -144,41 +163,6 @@ async def success_payment(message: Message):
     amount = int(message.successful_payment.invoice_payload.split("_")[1])
     change_balance(message.from_user.id, amount)
     await message.answer(f"✅ Начислено {amount} тыкв!")
-
-@dp.message(Command("admin"))
-async def cmd_admin(message: Message):
-    if message.from_user.id != ADMIN_ID: return
-    await message.answer("🛠 <b>Админка</b>\n/gifts all 15 | /gifts ID 50", parse_mode="HTML")
-
-@dp.message(Command("gifts"))
-async def cmd_gifts(message: Message):
-    if message.from_user.id != ADMIN_ID: return
-    parts = message.text.split()
-    if len(parts) < 3: return
-    target, price_stars = parts[1], int(parts[2])
-    
-    suitable = [g for g in GIFTS if g["stars"] == price_stars]
-    if not suitable: return await message.answer("Нет подарка за такую цену.")
-    gift = random.choice(suitable)
-
-    if target.lower() == "all":
-        users = get_all_users()
-        if not users: return
-        await message.answer(f"🎁 Раздаю «{gift['name']}» на {len(users)} игроков...")
-    else:
-        users = [int(target)]
-        await message.answer(f"🎁 Дарю «{gift['name']}» игроку {target}...")
-
-    success = 0
-    for uid in users:
-        try:
-            await bot.send_gift(user_id=uid, gift_id=gift["id"])
-            success += 1
-            await asyncio.sleep(0.15)
-        except Exception as e:
-            if target.lower() != "all": await message.answer(f"❌ Ошибка: {e}")
-
-    if target.lower() == "all": await message.answer(f"✅ Успешно: {success}/{len(users)}")
 
 async def handle_ping(request): return web.Response(text="OK")
 async def start_web_server():
