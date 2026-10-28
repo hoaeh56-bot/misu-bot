@@ -7,13 +7,16 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import Message, PreCheckoutQuery, LabeledPrice, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 import psycopg2
 import config
 
 logging.basicConfig(level=logging.INFO)
 session = AiohttpSession(api=TelegramAPIServer.from_base(config.API_SERVER))
 bot = Bot(token=config.TOKEN, session=session)
-dp = Dispatcher()
+dp = Dispatcher(storage=MemoryStorage())
 
 ADMIN_ID = 1780243205 
 
@@ -21,6 +24,11 @@ DATABASE_URL = os.environ.get(
     "DATABASE_URL", 
     "postgresql://postgres.ptcofqwsvyytcnoerazu:22E%23bS%23aMcN%40L6A@aws-0-eu-north-1.pooler.supabase.com:5432/postgres"
 )
+
+# Состояния для админки
+class AdminStates(StatesGroup):
+    waiting_for_id = State()
+    waiting_for_amount = State()
 
 def get_db():
     return psycopg2.connect(DATABASE_URL)
@@ -44,6 +52,12 @@ def get_balance(user_id):
 def change_balance(user_id, amount, username=None):
     con = get_db()
     cur = con.cursor()
+    # Если username не передан, ищем в базе
+    if not username:
+        cur.execute("SELECT username FROM users WHERE user_id = %s", (user_id,))
+        row = cur.fetchone()
+        if row: username = row[0]
+        
     cur.execute("""
         INSERT INTO users (user_id, username, balance) VALUES (%s, %s, %s)
         ON CONFLICT (user_id) DO UPDATE SET balance = users.balance + %s
@@ -108,7 +122,7 @@ async def success_payment(message: Message):
     new_bal = get_balance(message.from_user.id)
     await message.answer(f"✅ Оплата прошла успешно!\nТебе начислено {amount} тыкв 🎃\n\nТвой новый баланс: {new_bal} тыкв.")
 
-# ЛОВИМ ДАННЫЕ ОТ САЙТА (ВЫВОД ПРЕДМЕТОВ)
+# ЛОВИМ ДАННЫЕ ОТ САЙТА (ВЫВОД)
 @dp.message(F.web_app_data)
 async def web_app_data_handler(message: Message):
     import json
@@ -128,9 +142,61 @@ async def web_app_data_handler(message: Message):
             )
             await message.answer("✅ Запрос на вывод отправлен администратору!")
     except Exception as e:
-        logging.error(f"Ошибка обработки web_app_data: {e}")
+        logging.error(f"Ошибка: {e}")
 
-# === ЗАГЛУШКА ДЛЯ RENDER (чтобы не вырубался) ===
+# ========== АДМИН ПАНЕЛЬ ==========
+@dp.message(Command("admin"))
+async def cmd_admin(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("⛔ У тебя нет доступа.")
+        return
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💰 Выдать тыквы", callback_data="admin_give")]
+    ])
+    await message.answer("🛠 <b>Админ-панель</b>", reply_markup=kb, parse_mode="HTML")
+
+@dp.callback_query(F.data == "admin_give")
+async def admin_give_callback(call: Message, state: FSMContext):
+    if call.from_user.id != ADMIN_ID:
+        await call.answer("⛔", show_alert=True)
+        return
+    
+    await call.message.edit_text("Введи <b>ID игрока</b>, которому хочешь выдать тыквы:")
+    await state.set_state(AdminStates.waiting_for_id)
+
+@dp.message(AdminStates.waiting_for_id)
+async def admin_process_id(message: Message, state: FSMContext):
+    if not message.text.isdigit():
+        await message.answer("ID должен состоять только из цифр. Попробуй еще раз:")
+        return
+    
+    await state.update_data(target_id=int(message.text))
+    await state.set_state(AdminStates.waiting_for_amount)
+    await message.answer("Сколько <b>тыкв</b> выдать? (можно отрицательное число, чтобы забрать):")
+
+@dp.message(AdminStates.waiting_for_amount)
+async def admin_process_amount(message: Message, state: FSMContext):
+    try:
+        amount = int(message.text)
+    except ValueError:
+        await message.answer("Нужно ввести число.")
+        return
+
+    data = await state.get_data()
+    target_id = data['target_id']
+    
+    change_balance(target_id, amount)
+    new_bal = get_balance(target_id)
+    
+    await state.clear()
+    await message.answer(
+        f"✅ Игроку <code>{target_id}</code> начислено <b>{amount}</b> 🎃\n"
+        f"Его текущий баланс: <b>{new_bal}</b> 🎃",
+        parse_mode="HTML"
+    )
+
+# === ЗАГЛУШКА ДЛЯ RENDER ===
 async def handle_ping(request):
     return web.Response(text="Bot is running")
 
@@ -142,7 +208,6 @@ async def start_web_server():
     port = int(os.environ.get('PORT', 10000))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    logging.info(f"Web server started on port {port}")
 
 async def main():
     init_db()
