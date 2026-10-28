@@ -26,7 +26,6 @@ DATABASE_URL = os.environ.get(
     "postgresql://postgres.ptcofqwsvyytcnoerazu:22E%23bS%23aMcN%40L6A@aws-0-eu-north-1.pooler.supabase.com:5432/postgres"
 )
 
-# ТВОЙ ПОЛНЫЙ СПИСОК ПОДАРКОВ
 GIFTS = [
     {"id": "9000000000000151", "name": "Мишка", "stars": 15},
     {"id": "9000000000000148", "name": "Сердечко", "stars": 15},
@@ -84,6 +83,36 @@ def get_all_users():
     con.close()
     return [row[0] for row in rows]
 
+# === ПРОВЕРКА ЗАЯВОК НА ВЫВОД ===
+async def check_withdrawals():
+    while True:
+        try:
+            con = get_db()
+            cur = con.cursor()
+            cur.execute("SELECT id, user_id, item_name FROM withdrawals WHERE status = 'pending' LIMIT 1")
+            row = cur.fetchone()
+            
+            if row:
+                w_id, u_id, item_name = row
+                await bot.send_message(
+                    ADMIN_ID,
+                    f"📦 <b>НОВАЯ ЗАЯВКА НА ВЫВОД!</b>\n\n"
+                    f"🎮 Игрок (ID): <code>{u_id}</code>\n"
+                    f"🎁 Предмет: <b>{item_name}</b>\n\n"
+                    f"Свяжись с игроком для выдачи.",
+                    parse_mode="HTML"
+                )
+                cur.execute("UPDATE withdrawals SET status = 'done' WHERE id = %s", (w_id,))
+                con.commit()
+            
+            cur.close()
+            con.close()
+        except Exception as e:
+            logging.error(f"Ошибка проверки заявок: {e}")
+        
+        await asyncio.sleep(5) 
+
+# === КОМАНДЫ ===
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     change_balance(message.from_user.id, 0, message.from_user.username)
@@ -104,11 +133,7 @@ async def cmd_buy(message: Message):
     if len(parts) < 2 or not parts[1].isdigit(): return
     amount = int(parts[1])
     stars_price = int(amount * 5.5)
-    await message.answer_invoice(
-        title=f"Покупка {amount} тыкв", description=f"За {stars_price} звёзд.",
-        payload=f"buy_{amount}", provider_token="", currency="XTR", 
-        prices=[LabeledPrice(label="XTR", amount=stars_price)],
-    )
+    await message.answer_invoice(title=f"Покупка {amount} тыкв", description=f"За {stars_price} звёзд.", payload=f"buy_{amount}", provider_token="", currency="XTR", prices=[LabeledPrice(label="XTR", amount=stars_price)])
 
 @dp.pre_checkout_query()
 async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery):
@@ -120,83 +145,41 @@ async def success_payment(message: Message):
     change_balance(message.from_user.id, amount)
     await message.answer(f"✅ Начислено {amount} тыкв!")
 
-@dp.message(F.web_app_data)
-async def web_app_data_handler(message: Message):
-    import json
-    try:
-        data = json.loads(message.web_app_data.data)
-        if data.get("action") == "withdraw":
-            await bot.send_message(ADMIN_ID, f"📦 <b>Вывод!</b>\nID: <code>{data.get('user_id')}</code>\nПредмет: <b>{data.get('item_name')}</b>", parse_mode="HTML")
-            await message.answer("✅ Заявка отправлена!")
-    except Exception as e:
-        logging.error(f"Ошибка: {e}")
-
-# ========== АДМИНКА И ПОДАРКИ ==========
 @dp.message(Command("admin"))
 async def cmd_admin(message: Message):
     if message.from_user.id != ADMIN_ID: return
-    await message.answer(
-        "🛠 <b>Админ-панель</b>\n\n"
-        "Выдача подарков:\n"
-        "<code>/gifts all 15</code> (всем Мишку или Сердечко)\n"
-        "<code>/gifts all 50</code> (всем Торт, Букет, Ракету или Шампанское)\n"
-        "<code>/gifts all 100</code> (всем Кубок, Кольцо или Алмаз)\n"
-        "<code>/gifts 1780243205 100</code> (одному игроку)",
-        parse_mode="HTML"
-    )
+    await message.answer("🛠 <b>Админка</b>\n/gifts all 15 | /gifts ID 50", parse_mode="HTML")
 
 @dp.message(Command("gifts"))
 async def cmd_gifts(message: Message):
     if message.from_user.id != ADMIN_ID: return
-    
     parts = message.text.split()
-    if len(parts) < 3:
-        await message.answer("Формат: <code>/gifts all 15</code> или <code>/gifts ID 50</code>", parse_mode="HTML")
-        return
-
-    target = parts[1]
-    try:
-        price_stars = int(parts[2])
-    except ValueError:
-        await message.answer("Сумма должна быть числом.")
-        return
-
-    # Ищем подарок за указанную цену
+    if len(parts) < 3: return
+    target, price_stars = parts[1], int(parts[2])
+    
     suitable = [g for g in GIFTS if g["stars"] == price_stars]
-    if not suitable:
-        await message.answer(f"❌ Нет подарков за {price_stars} звезд. Доступные цены: 15, 25, 50, 100.")
-        return
-        
+    if not suitable: return await message.answer("Нет подарка за такую цену.")
     gift = random.choice(suitable)
 
-    # Рассылка
     if target.lower() == "all":
         users = get_all_users()
-        if not users: return await message.answer("В базе нет игроков.")
-        await message.answer(f"🎁 Раздаю подарок «{gift['name']}» ({gift['stars']}⭐) на {len(users)} игроков...")
+        if not users: return
+        await message.answer(f"🎁 Раздаю «{gift['name']}» на {len(users)} игроков...")
     else:
-        if not target.isdigit(): return await message.answer("Нужен ID или all.")
         users = [int(target)]
-        await message.answer(f"🎁 Дарю «{gift['name']}» ({gift['stars']}⭐) игроку {target}...")
+        await message.answer(f"🎁 Дарю «{gift['name']}» игроку {target}...")
 
     success = 0
     for uid in users:
         try:
-            # Отправляем подарок через API Мисы
             await bot.send_gift(user_id=uid, gift_id=gift["id"])
             success += 1
-            await asyncio.sleep(0.15) # Пауза, чтобы не забанили за флуд
+            await asyncio.sleep(0.15)
         except Exception as e:
-            logging.warning(f"Не удалось подарить {uid}: {e}")
-            if target.lower() != "all":
-                await message.answer(f"❌ Ошибка при отправке: {e}")
+            if target.lower() != "all": await message.answer(f"❌ Ошибка: {e}")
 
-    if target.lower() == "all":
-        await message.answer(f"✅ Раздача завершена! Успешно: {success}/{len(users)}")
-    else:
-        await message.answer(f"✅ Готово!")
+    if target.lower() == "all": await message.answer(f"✅ Успешно: {success}/{len(users)}")
 
-# === ЗАГЛУШКА ДЛЯ RENDER ===
 async def handle_ping(request): return web.Response(text="OK")
 async def start_web_server():
     app = web.Application()
@@ -209,8 +192,9 @@ async def start_web_server():
 async def main():
     init_db()
     asyncio.create_task(start_web_server())
-    try:
-        await bot.delete_webhook(drop_pending_updates=True)
+    asyncio.create_task(check_withdrawals())
+    
+    try: await bot.delete_webhook(drop_pending_updates=True)
     except: pass
     await dp.start_polling(bot)
 
