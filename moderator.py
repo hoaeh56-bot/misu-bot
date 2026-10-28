@@ -15,9 +15,9 @@ session = AiohttpSession(api=TelegramAPIServer.from_base(config.API_SERVER))
 bot = Bot(token=config.TOKEN, session=session)
 dp = Dispatcher()
 
-# =========================================================
-# ССЫЛКА НА БАЗУ (Session Pooler - работает на Render)
-# =========================================================
+# ТВОЙ ID ДЛЯ ПОЛУЧЕНИЯ ЗАЯВОК НА ВЫВОД
+ADMIN_ID = 1780243205 
+
 DATABASE_URL = os.environ.get(
     "DATABASE_URL", 
     "postgresql://postgres.ptcofqwsvyytcnoerazu:22E%23bS%23aMcN%40L6A@aws-0-eu-north-1.pooler.supabase.com:5432/postgres"
@@ -29,13 +29,7 @@ def get_db():
 def init_db():
     con = get_db()
     cur = con.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id BIGINT PRIMARY KEY,
-            username TEXT,
-            balance INTEGER DEFAULT 0
-        )
-    """)
+    cur.execute("CREATE TABLE IF NOT EXISTS users (user_id BIGINT PRIMARY KEY, username TEXT, balance INTEGER DEFAULT 0)")
     con.commit()
     cur.close()
     con.close()
@@ -59,18 +53,13 @@ def change_balance(user_id, amount, username=None):
     cur.close()
     con.close()
 
-# ========== КОМАНДЫ ==========
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     change_balance(message.from_user.id, 0, message.from_user.username)
-    
-    # Кнопка для открытия Мини-Аппа
-    web_app_url = "https://misu-site.vercel.app/" 
-    
+    web_app_url = f"https://misu-site.vercel.app/?user_id={message.from_user.id}"
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎃 Открыть игру", web_app=WebAppInfo(url=web_app_url))]
     ])
-    
     await message.answer(
         "Привет! Это бот для пополнения баланса.\n\n"
         "/profile - узнать свой ID и баланс\n"
@@ -83,15 +72,8 @@ async def cmd_start(message: Message):
 async def cmd_profile(message: Message):
     user_id = message.from_user.id
     bal = get_balance(user_id)
-    
-    text = (
-        f"👤 <b>Твой профиль</b>\n\n"
-        f"ID (для сайта): <code>{user_id}</code>\n"
-        f"Баланс: <b>{bal}</b> тыкв 🎃"
-    )
-    await message.answer(text, parse_mode="HTML")
+    await message.answer(f"👤 Твой ID: <code>{user_id}</code>\nБаланс: <b>{bal}</b> тыкв 🎃", parse_mode="HTML")
 
-# ========== ПОКУПКА ЗА STARS ==========
 @dp.message(Command("buy"))
 async def cmd_buy(message: Message):
     parts = message.text.split()
@@ -104,7 +86,6 @@ async def cmd_buy(message: Message):
         await message.answer("Минимум 10 тыкв.")
         return
 
-    # Курс: 100 тыкв = 550 звезд (т.е. 5.5 за штуку)
     stars_price = int(amount * 5.5)
 
     await message.answer_invoice(
@@ -124,15 +105,32 @@ async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery):
 async def success_payment(message: Message):
     payload = message.successful_payment.invoice_payload
     amount = int(payload.split("_")[1])
-    
     change_balance(message.from_user.id, amount)
     new_bal = get_balance(message.from_user.id)
-    
-    await message.answer(
-        f"✅ Оплата прошла успешно!\n"
-        f"Тебе начислено {amount} тыкв 🎃\n\n"
-        f"Твой новый баланс: {new_bal} тыкв."
-    )
+    await message.answer(f"✅ Оплата прошла успешно!\nТебе начислено {amount} тыкв 🎃\n\nТвой новый баланс: {new_bal} тыкв.")
+
+# ЛОВИМ ДАННЫЕ ОТ САЙТА (ВЫВОД ПРЕДМЕТОВ)
+@dp.message(F.web_app_data)
+async def web_app_data_handler(message: Message):
+    import json
+    try:
+        data = json.loads(message.web_app_data.data)
+        if data.get("action") == "withdraw":
+            item_name = data.get("item_name")
+            user_id = data.get("user_id")
+            
+            # Отправляем тебе уведомление
+            await bot.send_message(
+                ADMIN_ID,
+                f"📦 <b>Запрос на вывод!</b>\n\n"
+                f"Игрок (ID): <code>{user_id}</code>\n"
+                f"Предмет: <b>{item_name}</b>\n\n"
+                f"Свяжись с ним для выдачи.",
+                parse_mode="HTML"
+            )
+            await message.answer("✅ Запрос на вывод отправлен администратору!")
+    except Exception as e:
+        logging.error(f"Ошибка обработки web_app_data: {e}")
 
 async def main():
     init_db()
