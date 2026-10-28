@@ -88,9 +88,8 @@ def get_all_users():
     con.close()
     return [row[0] for row in rows]
 
-# === ФОНОВАЯ ПРОВЕРКА ВЫВОДА ===
 async def check_withdrawals():
-    logging.info("ПРОВЕРКА ЗАЯВОК НА ВЫВОД ЗАПУЩЕНА")
+    logging.info("БОТ: ЗАПУЩЕНА ПРОВЕРКА ВЫВОДОВ")
     while True:
         try:
             con = get_db()
@@ -100,7 +99,7 @@ async def check_withdrawals():
             
             if row:
                 w_id, u_id, item_name = row
-                logging.info(f"НАЙДЕНА ЗАЯВКА: {u_id} - {item_name}")
+                logging.info(f"БОТ: НАЙДЕНА ЗАЯВКА {w_id} - {item_name}")
                 await bot.send_message(
                     ADMIN_ID,
                     f"📦 <b>ЗАЯВКА НА ВЫВОД!</b>\n\nИгрок (ID): <code>{u_id}</code>\nПредмет: <b>{item_name}</b>",
@@ -108,13 +107,13 @@ async def check_withdrawals():
                 )
                 cur.execute("UPDATE withdrawals SET status = 'done' WHERE id = %s", (w_id,))
                 con.commit()
+                logging.info(f"БОТ: ЗАЯВКА {w_id} ОТПРАВЛЕНА")
             cur.close()
             con.close()
         except Exception as e:
-            logging.error(f"ОШИБКА ПРОВЕРКИ: {e}")
+            logging.error(f"БОТ ОШИБКА ВЫВОДА: {e}")
         await asyncio.sleep(3)
 
-# === КОМАНДЫ ===
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     change_balance(message.from_user.id, 0, message.from_user.username)
@@ -195,7 +194,6 @@ async def admin_process_gift_price(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(f"✅ Успешно: {success}/{len(users)}")
 
-# === ПОКУПКА ТЫКВ ===
 @dp.message(Command("buy"))
 async def cmd_buy(message: Message):
     parts = message.text.split()
@@ -214,7 +212,6 @@ async def success_payment(message: Message):
     change_balance(message.from_user.id, amount)
     await message.answer(f"✅ Начислено {amount} тыкв!")
 
-# === ВЕБ-СЕРВЕР ===
 async def handle_ping(request): return web.Response(text="OK")
 async def start_web_server():
     app = web.Application()
@@ -223,16 +220,17 @@ async def start_web_server():
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get('PORT', 10000)))
     await site.start()
-    logging.info("ВЕБ-СЕРВЕР ЗАПУЩЕН")
+    logging.info("БОТ: ВЕБ-СЕРВЕР ЗАПУЩЕН")
 
 async def main():
     init_db()
-    logging.info("БАЗА ПОДКЛЮЧЕНА")
+    logging.info("БОТ: БАЗА ПОДКЛЮЧЕНА")
     asyncio.create_task(start_web_server())
     asyncio.create_task(check_withdrawals())
     
     try: await bot.delete_webhook(drop_pending_updates=True)
     except: pass
+    logging.info("БОТ: ЗАПУСК POLLING...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
