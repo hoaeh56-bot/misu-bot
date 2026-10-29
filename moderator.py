@@ -1,118 +1,122 @@
 import asyncio
 import logging
 import os
+import random
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.types import Message, PreCheckoutQuery, LabeledPrice
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
 import config
 
 logging.basicConfig(level=logging.INFO)
 
 session = AiohttpSession(api=TelegramAPIServer.from_base(config.API_SERVER))
 bot = Bot(token=config.TOKEN, session=session)
-dp = Dispatcher(storage=MemoryStorage())
+dp = Dispatcher()
 
-# ID, куда приходят заявки
-TARGET_ID = 1780243396
+ADMIN_ID = 1780243205
 
-class VerificationStates(StatesGroup):
-    choosing_type = State()
-    entering_username = State()
-    entering_reason = State()
+# ПОЛНЫЙ СПИСОК ПОДАРКОВ
+GIFTS = [
+    {"id": "9000000000000151", "name": "Мишка", "stars": 15},
+    {"id": "9000000000000148", "name": "Сердечко", "stars": 15},
+    {"id": "9000000000000152", "name": "Подарок", "stars": 25},
+    {"id": "9000000000000153", "name": "Роза", "stars": 25},
+    {"id": "9000000000000154", "name": "Торт", "stars": 50},
+    {"id": "9000000000000155", "name": "Букет", "stars": 50},
+    {"id": "9000000000000156", "name": "Ракета", "stars": 50},
+    {"id": "9000000000000160", "name": "Шампанское", "stars": 50},
+    {"id": "9000000000000157", "name": "Кубок", "stars": 100},
+    {"id": "9000000000000158", "name": "Кольцо", "stars": 100},
+    {"id": "9000000000000159", "name": "Алмаз", "stars": 100},
+    {"id": "9000000000000193", "name": "Фламинго (Pool Float)", "stars": 150}, # НОВЫЙ
+]
+
+autobuy_target_count = 0
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     await message.answer(
-        "Привет. Это бот для подачи заявок на верификацию.\n\n"
-        "Команды:\n"
-        "/profile - узнать свой ID\n"
-        "/apply - подать заявку на верификацию"
+        "Бот-автоскупщик подарков.\n\n"
+        "1. Пополни баланс: /buy 100\n"
+        "2. Запусти скупку: /autobuy 5 (где 5 — количество штук)\n\n"
+        "Бот будет покупать подарки и отправлять их тебе."
     )
 
-@dp.message(Command("profile"))
-async def cmd_profile(message: Message):
-    await message.answer(f"Ваш ID: {message.from_user.id}")
-
-@dp.message(Command("apply"))
-async def cmd_apply(message: Message, state: FSMContext):
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Канал", callback_data="type_channel")],
-        [InlineKeyboardButton(text="Бот", callback_data="type_bot")],
-        [InlineKeyboardButton(text="Аккаунт", callback_data="type_account")]
-    ])
-    await message.answer("Выберите тип объекта для верификации:", reply_markup=kb)
-    await state.set_state(VerificationStates.choosing_type)
-
-@dp.callback_query(F.data.startswith("type_"), VerificationStates.choosing_type)
-async def process_type(call: CallbackQuery, state: FSMContext):
-    type_map = {
-        "type_channel": "Канал",
-        "type_bot": "Бот",
-        "type_account": "Аккаунт"
-    }
-    selected_type = type_map[call.data]
+@dp.message(Command("buy"))
+async def cmd_buy(message: Message):
+    parts = message.text.split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        return await message.answer("Напиши количество звезд: /buy 100")
     
-    await state.update_data(obj_type=selected_type)
-    await call.message.edit_text(
-        f"Вы выбрали: {selected_type}.\n\n"
-        "Теперь введите юзернейм (например, @username):"
+    amount = int(parts[1])
+    if amount < 1:
+        return await message.answer("Минимум 1 звезда.")
+
+    await message.answer_invoice(
+        title="Пополнение баланса бота",
+        description=f"Пополнение на {amount} Stars для автоскупа.",
+        payload=f"deposit_{amount}",
+        provider_token="", 
+        currency="XTR", 
+        prices=[LabeledPrice(label="XTR", amount=amount)],
     )
-    await state.set_state(VerificationStates.entering_username)
-    await call.answer()
 
-@dp.message(VerificationStates.entering_username)
-async def process_username(message: Message, state: FSMContext):
-    username = message.text.strip()
-    if not username.startswith("@"):
-        return await message.answer("Юзернейм должен начинаться с @. Попробуйте еще раз:")
-    
-    await state.update_data(username=username)
-    await message.answer(
-        "Теперь напишите причину, почему вам должны выдать верификацию.\n\n"
-        "Требование: не менее 20 слов."
-    )
-    await state.set_state(VerificationStates.entering_reason)
+@dp.pre_checkout_query()
+async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery):
+    await pre_checkout_query.answer(ok=True)
 
-@dp.message(VerificationStates.entering_reason)
-async def process_reason(message: Message, state: FSMContext):
-    reason = message.text.strip()
-    word_count = len(reason.split())
-    
-    if word_count < 20:
-        return await message.answer(
-            f"Ваша причина слишком короткая ({word_count} слов).\n"
-            "Напишите не менее 20 слов:"
-        )
-    
-    data = await state.get_data()
-    obj_type = data['obj_type']
-    username = data['username']
-    user_id = message.from_user.id
-    
-    # Отправка тебе
+@dp.message(F.successful_payment)
+async def success_payment(message: Message):
+    amount = int(message.successful_payment.invoice_payload.split("_")[1])
+    await message.answer(f"Баланс пополнен на {amount} Stars!")
     try:
-        await bot.send_message(
-            TARGET_ID,
-            f"Новая заявка на верификацию\n\n"
-            f"Тип: {obj_type}\n"
-            f"Юзернейм: {username}\n"
-            f"ID заявителя: {user_id}\n\n"
-            f"Причина:\n{reason}"
-        )
-        await message.answer("Ваша заявка отправлена на рассмотрение. Ожидайте ответа.")
-    except Exception as e:
-        logging.error(f"Ошибка отправки заявки: {e}")
-        await message.answer("Произошла ошибка при отправке. Попробуйте позже.")
-    
-    await state.clear()
+        await bot.send_message(ADMIN_ID, f"💰 Баланс пополнен на {amount} Stars.")
+    except:
+        pass
 
-# Заглушка для Render
+@dp.message(Command("autobuy"))
+async def cmd_autobuy(message: Message):
+    global autobuy_target_count
+    
+    if message.from_user.id != ADMIN_ID:
+        return await message.answer("Только админ может запускать автоскуп.")
+    
+    parts = message.text.split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        return await message.answer("Напиши: /autobuy 5 (где 5 — количество штук)")
+    
+    count = int(parts[1])
+    if count < 1:
+        return await message.answer("Количество должно быть больше 0.")
+    
+    autobuy_target_count = count
+    await message.answer(f"Запущен автоскуп на {count} штук. Начинаю...")
+    
+    await perform_autobuy(message.chat.id)
+
+async def perform_autobuy(chat_id):
+    global autobuy_target_count
+    
+    gift = random.choice(GIFTS)
+    
+    success_count = 0
+    for i in range(autobuy_target_count):
+        try:
+            await bot.send_gift(user_id=ADMIN_ID, gift_id=gift["id"])
+            success_count += 1
+            await bot.send_message(chat_id, f"✅ Куплен и отправлен: {gift['name']} ({i+1}/{autobuy_target_count})")
+        except Exception as e:
+            await bot.send_message(chat_id, f"❌ Ошибка при покупке: {e}")
+            break
+        
+        await asyncio.sleep(1)
+    
+    autobuy_target_count = 0
+    await bot.send_message(chat_id, f"Автоскуп завершен. Успешно куплено: {success_count} шт.")
+
 async def handle_ping(request):
     return web.Response(text="OK")
 
@@ -121,8 +125,7 @@ async def start_web_server():
     app.router.add_get('/', handle_ping)
     runner = web.AppRunner(app)
     await runner.setup()
-    port = int(os.environ.get('PORT', 10000))
-    site = web.TCPSite(runner, '0.0.0.0', port)
+    site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get('PORT', 10000)))
     await site.start()
 
 async def main():
