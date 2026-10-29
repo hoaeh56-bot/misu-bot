@@ -16,9 +16,7 @@ session = AiohttpSession(api=TelegramAPIServer.from_base(config.API_SERVER))
 bot = Bot(token=config.TOKEN, session=session)
 dp = Dispatcher()
 
-ADMIN_ID = 1780243205
-
-# ПОЛНЫЙ СПИСОК ПОДАРКОВ
+# Список подарков
 GIFTS = [
     {"id": "9000000000000151", "name": "Мишка", "stars": 15},
     {"id": "9000000000000148", "name": "Сердечко", "stars": 15},
@@ -31,10 +29,8 @@ GIFTS = [
     {"id": "9000000000000157", "name": "Кубок", "stars": 100},
     {"id": "9000000000000158", "name": "Кольцо", "stars": 100},
     {"id": "9000000000000159", "name": "Алмаз", "stars": 100},
-    {"id": "9000000000000193", "name": "Фламинго (Pool Float)", "stars": 150}, # НОВЫЙ
+    {"id": "9000000000000193", "name": "Фламинго (Pool Float)", "stars": 150},
 ]
-
-autobuy_target_count = 0
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
@@ -72,18 +68,9 @@ async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery):
 async def success_payment(message: Message):
     amount = int(message.successful_payment.invoice_payload.split("_")[1])
     await message.answer(f"Баланс пополнен на {amount} Stars!")
-    try:
-        await bot.send_message(ADMIN_ID, f"💰 Баланс пополнен на {amount} Stars.")
-    except:
-        pass
 
 @dp.message(Command("autobuy"))
 async def cmd_autobuy(message: Message):
-    global autobuy_target_count
-    
-    if message.from_user.id != ADMIN_ID:
-        return await message.answer("Только админ может запускать автоскуп.")
-    
     parts = message.text.split()
     if len(parts) < 2 or not parts[1].isdigit():
         return await message.answer("Напиши: /autobuy 5 (где 5 — количество штук)")
@@ -92,29 +79,27 @@ async def cmd_autobuy(message: Message):
     if count < 1:
         return await message.answer("Количество должно быть больше 0.")
     
-    autobuy_target_count = count
     await message.answer(f"Запущен автоскуп на {count} штук. Начинаю...")
     
-    await perform_autobuy(message.chat.id)
+    await perform_autobuy(message.chat.id, message.from_user.id, count)
 
-async def perform_autobuy(chat_id):
-    global autobuy_target_count
-    
+async def perform_autobuy(chat_id, user_id, count):
+    # Берем случайный подарок из списка для каждого покупателя
     gift = random.choice(GIFTS)
     
     success_count = 0
-    for i in range(autobuy_target_count):
+    for i in range(count):
         try:
-            await bot.send_gift(user_id=ADMIN_ID, gift_id=gift["id"])
+            # Отправляем подарок тому, кто запустил
+            await bot.send_gift(user_id=user_id, gift_id=gift["id"])
             success_count += 1
-            await bot.send_message(chat_id, f"✅ Куплен и отправлен: {gift['name']} ({i+1}/{autobuy_target_count})")
+            await bot.send_message(chat_id, f"✅ Куплен и отправлен: {gift['name']} ({i+1}/{count})")
         except Exception as e:
             await bot.send_message(chat_id, f"❌ Ошибка при покупке: {e}")
             break
         
         await asyncio.sleep(1)
     
-    autobuy_target_count = 0
     await bot.send_message(chat_id, f"Автоскуп завершен. Успешно куплено: {success_count} шт.")
 
 async def handle_ping(request):
