@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-import random
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
@@ -16,29 +15,14 @@ session = AiohttpSession(api=TelegramAPIServer.from_base(config.API_SERVER))
 bot = Bot(token=config.TOKEN, session=session)
 dp = Dispatcher()
 
-# Список подарков
-GIFTS = [
-    {"id": "9000000000000151", "name": "Мишка", "stars": 15},
-    {"id": "9000000000000148", "name": "Сердечко", "stars": 15},
-    {"id": "9000000000000152", "name": "Подарок", "stars": 25},
-    {"id": "9000000000000153", "name": "Роза", "stars": 25},
-    {"id": "9000000000000154", "name": "Торт", "stars": 50},
-    {"id": "9000000000000155", "name": "Букет", "stars": 50},
-    {"id": "9000000000000156", "name": "Ракета", "stars": 50},
-    {"id": "9000000000000160", "name": "Шампанское", "stars": 50},
-    {"id": "9000000000000157", "name": "Кубок", "stars": 100},
-    {"id": "9000000000000158", "name": "Кольцо", "stars": 100},
-    {"id": "9000000000000159", "name": "Алмаз", "stars": 100},
-    {"id": "9000000000000193", "name": "Фламинго (Pool Float)", "stars": 150},
-]
-
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     await message.answer(
-        "Бот-автоскупщик подарков.\n\n"
-        "1. Пополни баланс: /buy 100\n"
-        "2. Запусти скупку: /autobuy 5 (где 5 — количество штук)\n\n"
-        "Бот будет покупать подарки и отправлять их тебе."
+        "Привет. Это бот-скупщик подарков.\n\n"
+        "Как пользоваться:\n"
+        "1. Пополни баланс бота: /buy 100 (на 100 звезд)\n"
+        "2. Отправь ID подарка и количество (например: 9000000000000193 5)\n\n"
+        "Бот купит указанное количество подарков и отправит их тебе."
     )
 
 @dp.message(Command("buy"))
@@ -53,7 +37,7 @@ async def cmd_buy(message: Message):
 
     await message.answer_invoice(
         title="Пополнение баланса бота",
-        description=f"Пополнение на {amount} Stars для автоскупа.",
+        description=f"Пополнение на {amount} Stars для скупки.",
         payload=f"deposit_{amount}",
         provider_token="", 
         currency="XTR", 
@@ -69,38 +53,33 @@ async def success_payment(message: Message):
     amount = int(message.successful_payment.invoice_payload.split("_")[1])
     await message.answer(f"Баланс пополнен на {amount} Stars!")
 
-@dp.message(Command("autobuy"))
-async def cmd_autobuy(message: Message):
+# ЛОВИМ ID И КОЛИЧЕСТВО
+@dp.message(F.text.regexp(r'^\d+\s+\d+$'))
+async def process_gift_order(message: Message):
     parts = message.text.split()
-    if len(parts) < 2 or not parts[1].isdigit():
-        return await message.answer("Напиши: /autobuy 5 (где 5 — количество штук)")
-    
+    gift_id = parts[0].strip()
     count = int(parts[1])
+    
     if count < 1:
         return await message.answer("Количество должно быть больше 0.")
+    if count > 100:
+        return await message.answer("Максимум 100 штук за раз.")
     
-    await message.answer(f"Запущен автоскуп на {count} штук. Начинаю...")
-    
-    await perform_autobuy(message.chat.id, message.from_user.id, count)
-
-async def perform_autobuy(chat_id, user_id, count):
-    # Берем случайный подарок из списка для каждого покупателя
-    gift = random.choice(GIFTS)
+    await message.answer(f"Начинаю скупку {count} шт. подарка с ID: {gift_id}...")
     
     success_count = 0
     for i in range(count):
         try:
-            # Отправляем подарок тому, кто запустил
-            await bot.send_gift(user_id=user_id, gift_id=gift["id"])
+            await bot.send_gift(user_id=message.from_user.id, gift_id=gift_id)
             success_count += 1
-            await bot.send_message(chat_id, f"✅ Куплен и отправлен: {gift['name']} ({i+1}/{count})")
+            await message.answer(f"✅ Куплен и отправлен ({i+1}/{count})")
         except Exception as e:
-            await bot.send_message(chat_id, f"❌ Ошибка при покупке: {e}")
+            await message.answer(f"❌ Ошибка на {i+1}-м подарке: {e}")
             break
         
-        await asyncio.sleep(1)
+        await asyncio.sleep(1) # Пауза, чтобы не забанили за спам
     
-    await bot.send_message(chat_id, f"Автоскуп завершен. Успешно куплено: {success_count} шт.")
+    await message.answer(f"Скупка завершена. Успешно куплено: {success_count} из {count}.")
 
 async def handle_ping(request):
     return web.Response(text="OK")
