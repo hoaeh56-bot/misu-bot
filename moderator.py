@@ -1,8 +1,8 @@
 import asyncio
 import logging
 import os
-import json
 import psycopg2
+import json
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
@@ -38,29 +38,28 @@ async def cmd_start(message: Message):
         reply_markup=kb
     )
 
-# ЛОВИМ ЗАПРОС ОТ БИРЖИ
-@dp.message(F.web_app_data)
-async def web_app_data_handler(message: Message):
+# === ПРИЕМ ЗАПРОСОВ С САЙТА (ВМЕСТО tg.sendData) ===
+async def handle_buy_request(request):
     try:
-        data = json.loads(message.web_app_data.data)
-        if data.get("action") == "buy_crypto":
-            coin = data.get("coin")
-            amount = float(data.get("amount"))
-            stars = int(data.get("stars"))
-            
-            # Сохраняем в payload, чтобы при оплате знать, что зачислить
-            payload = f"buycrypto_{coin}_{amount}"
-            
-            await message.answer_invoice(
-                title=f"Покупка {amount} {coin}",
-                description=f"Оплата {stars} Stars",
-                payload=payload,
-                provider_token="", 
-                currency="XTR", 
-                prices=[LabeledPrice(label="XTR", amount=stars)],
-            )
+        data = await request.json()
+        user_id = int(data.get("user_id"))
+        coin = data.get("coin")
+        amount = float(data.get("amount"))
+        stars = int(data.get("stars"))
+
+        await bot.send_invoice(
+            chat_id=user_id,
+            title=f"Покупка {amount} {coin}",
+            description=f"Оплата {stars} Stars",
+            payload=f"buycrypto_{coin}_{amount}",
+            provider_token="",
+            currency="XTR",
+            prices=[LabeledPrice(label="XTR", amount=stars)],
+        )
+        return web.json_response({"status": "ok"})
     except Exception as e:
-        logging.error(f"Ошибка web_app_data: {e}")
+        logging.error(f"Ошибка запроса: {e}")
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
 
 @dp.pre_checkout_query()
 async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery):
@@ -69,48 +68,42 @@ async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery):
 @dp.message(F.successful_payment)
 async def success_payment(message: Message):
     payload = message.successful_payment.invoice_payload
-    
     if payload.startswith("buycrypto_"):
         parts = payload.split("_")
         coin = parts[1]
         amount = float(parts[2])
         user_id = message.from_user.id
         
-        # Зачисляем в базу
         con = get_db()
         cur = con.cursor()
-        
-        # Проверяем, есть ли юзер
         cur.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
         if not cur.fetchone():
             cur.execute("INSERT INTO users (user_id) VALUES (%s)", (user_id,))
         
-        # Обновляем нужную колонку
-        if coin == "USDT":
-            cur.execute("UPDATE users SET usdt_balance = usdt_balance + %s WHERE user_id = %s", (amount, user_id))
-        elif coin == "GRAM":
-            cur.execute("UPDATE users SET gram_balance = gram_balance + %s WHERE user_id = %s", (amount, user_id))
-        elif coin == "SOL":
-            cur.execute("UPDATE users SET sol_balance = sol_balance + %s WHERE user_id = %s", (amount, user_id))
-        elif coin == "TRX":
-            cur.execute("UPDATE users SET trx_balance = trx_balance + %s WHERE user_id = %s", (amount, user_id))
+        if coin == "USDT": cur.execute("UPDATE users SET usdt_balance = usdt_balance + %s WHERE user_id = %s", (amount, user_id))
+        elif coin == "GRAM": cur.execute("UPDATE users SET gram_balance = gram_balance + %s WHERE user_id = %s", (amount, user_id))
+        elif coin == "SOL": cur.execute("UPDATE users SET sol_balance = sol_balance + %s WHERE user_id = %s", (amount, user_id))
+        elif coin == "TRX": cur.execute("UPDATE users SET trx_balance = trx_balance + %s WHERE user_id = %s", (amount, user_id))
             
         con.commit()
         cur.close()
         con.close()
-        
         await message.answer(f"✅ Успешно куплено {amount} {coin}!\nПроверь баланс в кошельке.")
 
+# === ЗАПУСК ВЕБ-СЕРВЕРА ДЛЯ RENDER И ДЛЯ САЙТА ===
 async def handle_ping(request):
     return web.Response(text="OK")
 
 async def start_web_server():
     app = web.Application()
     app.router.add_get('/', handle_ping)
+    app.router.add_post('/buy', handle_buy_request) # <--- Новый маршрут для покупки
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get('PORT', 10000)))
+    port = int(os.environ.get('PORT', 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
+    logging.info(f"ВЕБ-СЕРВЕР ЗАПУЩЕН НА ПОРТУ {port}")
 
 async def main():
     asyncio.create_task(start_web_server())
