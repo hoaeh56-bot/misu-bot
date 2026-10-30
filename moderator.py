@@ -132,3 +132,14 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+@dp.message(Command("test_gifts"))
+async def cmd_test_gifts(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        # Пробуем запросить доступные подарки
+        result = await bot.get_available_gifts()
+        await message.answer(f"✅ Сервер вернул данные:\n{result}")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при запросе подарков:\n<code>{e}</code>", parse_mode="HTML")
