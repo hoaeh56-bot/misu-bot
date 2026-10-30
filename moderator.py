@@ -3,6 +3,7 @@ import logging
 import os
 import psycopg2
 import json
+import aiohttp_cors
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
@@ -38,7 +39,7 @@ async def cmd_start(message: Message):
         reply_markup=kb
     )
 
-# === ПРИЕМ ЗАПРОСОВ С САЙТА (ВМЕСТО tg.sendData) ===
+# === ПРИЕМ ЗАПРОСОВ С САЙТА ===
 async def handle_buy_request(request):
     try:
         data = await request.json()
@@ -90,14 +91,30 @@ async def success_payment(message: Message):
         con.close()
         await message.answer(f"✅ Успешно куплено {amount} {coin}!\nПроверь баланс в кошельке.")
 
-# === ЗАПУСК ВЕБ-СЕРВЕРА ДЛЯ RENDER И ДЛЯ САЙТА ===
+# === ЗАПУСК ВЕБ-СЕРВЕРА С CORS ===
 async def handle_ping(request):
     return web.Response(text="OK")
 
 async def start_web_server():
     app = web.Application()
+    
+    # РАЗРЕШАЕМ ЗАПРОСЫ С САЙТА
+    cors = aiohttp_cors.setup(app, defaults={
+        "*": aiohttp_cors.ResourceOptions(
+            allow_credentials=True,
+            expose_headers="*",
+            allow_headers="*",
+            allow_methods="*"
+        )
+    })
+    
     app.router.add_get('/', handle_ping)
-    app.router.add_post('/buy', handle_buy_request) # <--- Новый маршрут для покупки
+    app.router.add_post('/buy', handle_buy_request)
+    
+    # Применяем CORS
+    for route in list(app.router.routes()):
+        cors.add(route)
+        
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get('PORT', 10000))
