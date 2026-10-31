@@ -3,12 +3,14 @@ import logging
 import os
 import psycopg2
 import aiohttp_cors
+import hashlib
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 from aiogram.types import (
     Message, PreCheckoutQuery, LabeledPrice, InlineKeyboardMarkup,
-    InlineKeyboardButton, WebAppInfo, CallbackQuery, FSInputFile
+    InlineKeyboardButton, WebAppInfo, CallbackQuery, FSInputFile,
+    InlineQuery, InlineQueryResultArticle, InputTextMessageContent
 )
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
@@ -27,11 +29,10 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres.ptcofqwsvyy
 def get_db():
     return psycopg2.connect(DATABASE_URL)
 
-# Глобальные переменные для шагов
 pending_action = None
 pending_coin = "USDT"
 
-# === ГЕНЕРАЦИЯ КАРТИНКИ ЧЕКА ===
+# === ГЕНЕРАЦИЯ КАРТИНКИ ===
 def generate_check_image(amount, coin, title="Crypto Check"):
     width, height = 800, 400
     img = Image.new('RGB', (width, height), color='#1e1e1e')
@@ -98,7 +99,45 @@ async def cmd_start(message: Message):
     ])
     await message.answer("Добро пожаловать в Crypto Bot.\nВыберите действие:", reply_markup=kb)
 
-# === МЕНЮ СОЗДАНИЯ ЧЕКА ===
+# === ИНЛАЙН РЕЖИМ (@cryptobot 100) ===
+@dp.inline_query()
+async def inline_check_handler(inline_query: InlineQuery):
+    query = inline_query.query.strip()
+    if not query:
+        return
+    
+    parts = query.split()
+    try:
+        amount = float(parts[0])
+    except:
+        return
+    
+    coin = "USDT"
+    if len(parts) > 1 and parts[1].upper() in ['USDT', 'GRAM', 'SOL', 'TRX']:
+        coin = parts[1].upper()
+
+    # Генерируем уникальный ID
+    check_id = hashlib.md5(f"{inline_query.from_user.id}_{amount}_{coin}_{asyncio.get_event_loop().time()}".encode()).hexdigest()
+
+    # Создаем результат (текст + кнопка)
+    result = InlineQueryResultArticle(
+        id=check_id,
+        title=f"Чек на {amount} {coin}",
+        description="Нажмите, чтобы отправить чек",
+        input_message_content=InputTextMessageContent(
+            message_text=f"Чек на {amount} {coin}\n\nЧтобы активировать, нажмите кнопку ниже."
+        ),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=f"Получить {amount} {coin}",
+                url=f"https://t.me/cryptobot?start=check_inline_{inline_query.from_user.id}_{amount}_{coin}"
+            )]
+        ])
+    )
+
+    await inline_query.answer([result], cache_time=1)
+
+# === МЕНЮ КНОПОК ===
 @dp.callback_query(F.data == "create_check_menu")
 async def check_currency_menu(callback: CallbackQuery):
     global pending_action
@@ -110,7 +149,6 @@ async def check_currency_menu(callback: CallbackQuery):
     await callback.message.edit_text("Выберите валюту для чека:", reply_markup=kb)
     await callback.answer()
 
-# === МЕНЮ СОЗДАНИЯ СЧЕТА ===
 @dp.callback_query(F.data == "create_invoice_menu")
 async def invoice_currency_menu(callback: CallbackQuery):
     global pending_action
@@ -122,7 +160,6 @@ async def invoice_currency_menu(callback: CallbackQuery):
     await callback.message.edit_text("Выберите валюту для счета:", reply_markup=kb)
     await callback.answer()
 
-# === ВЫБОР ВАЛЮТЫ ===
 @dp.callback_query(F.data.startswith("curr_"))
 async def ask_amount(callback: CallbackQuery):
     global pending_coin
@@ -130,7 +167,6 @@ async def ask_amount(callback: CallbackQuery):
     await callback.message.edit_text(f"Введите сумму в {pending_coin}:")
     await callback.answer()
 
-# === ВВОД СУММЫ ===
 @dp.message(F.text.regexp(r'^\d+(\.\d+)?$'))
 async def handle_amount_input(message: Message):
     global pending_action, pending_coin
@@ -141,9 +177,9 @@ async def handle_amount_input(message: Message):
     elif pending_action == "invoice":
         await create_invoice_logic(message, amount, pending_coin)
         
-    pending_action = None # Сбрасываем после создания
+    pending_action = None
 
-# === ЛОГИКА СОЗДАНИЯ ЧЕКА (БЕЗ ПАРОЛЯ) ===
+# === СОЗДАНИЕ ЧЕКА ===
 async def create_check_logic(message: Message, amount: float, coin: str):
     if amount <= 0: return await message.answer("Сумма должна быть больше 0")
     
@@ -170,7 +206,7 @@ async def create_check_logic(message: Message, amount: float, coin: str):
     await bot.send_photo(chat_id=message.chat.id, photo=photo, caption=caption, reply_markup=kb)
     if os.path.exists(img_path): os.remove(img_path)
 
-# === ЛОГИКА СОЗДАНИЯ СЧЕТА ===
+# === СОЗДАНИЕ СЧЕТА ===
 async def create_invoice_logic(message: Message, amount: float, coin: str):
     if amount <= 0: return await message.answer("Сумма должна быть больше 0")
     
