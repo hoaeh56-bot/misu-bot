@@ -22,7 +22,8 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
-ADMIN_ID = 1780243396
+# ТВОЙ НОВЫЙ ADMIN ID
+ADMIN_ID = 1780243441 
 
 session = AiohttpSession(api=TelegramAPIServer.from_base(config.API_SERVER))
 bot = Bot(token=config.TOKEN, session=session)
@@ -232,7 +233,7 @@ async def create_invoice_logic(message: Message, amount: float, coin: str):
     await bot.send_photo(chat_id=message.chat.id, photo=photo, caption=caption, reply_markup=kb)
     if os.path.exists(img_path): os.remove(img_path)
 
-# === АКТИВАЦИЯ ЧЕКА С ЛОГАМИ ===
+# === АКТИВАЦИЯ ЧЕКА (С УВЕДОМЛЕНИЕМ) ===
 async def process_check_activation(message: Message, check_id: str):
     con = get_db(); cur = con.cursor()
     cur.execute("SELECT amount, coin, is_activated, creator_id FROM checks WHERE id = %s", (check_id,))
@@ -251,7 +252,6 @@ async def process_check_activation(message: Message, check_id: str):
     
     await message.answer(f"Вы активировали чек и получили {amount} {coin}!")
     
-    # Уведомление создателю (с логированием)
     try:
         user_info = await bot.get_chat(message.from_user.id)
         name = user_info.first_name or "Пользователь"
@@ -263,11 +263,11 @@ async def process_check_activation(message: Message, check_id: str):
             f"🔔 Ваш чек на {amount} {coin} активировал {user_link}!", 
             parse_mode="HTML"
         )
-        logging.info(f"УВЕДОМЛЕНИЕ ОТПРАВЛЕНО создателю {creator_id} (активация чека)")
+        logging.info(f"УВЕДОМЛЕНИЕ ОТПРАВЛЕНО создателю {creator_id}")
     except Exception as e:
         logging.error(f"ОШИБКА УВЕДОМЛЕНИЯ создателю {creator_id}: {e}")
 
-# === ОПЛАТА СЧЕТА С ЛОГАМИ ===
+# === ОПЛАТА СЧЕТА (С УВЕДОМЛЕНИЕМ) ===
 async def process_invoice_payment(message: Message, invoice_id: str):
     con = get_db(); cur = con.cursor()
     cur.execute("SELECT amount, coin, is_activated, creator_id FROM checks WHERE id = %s", (invoice_id,))
@@ -294,7 +294,6 @@ async def process_invoice_payment(message: Message, invoice_id: str):
     
     await message.answer(f"Вы оплатили счет на {amount} {coin}!")
     
-    # Уведомление создателю (с логированием)
     try:
         user_info = await bot.get_chat(message.from_user.id)
         name = user_info.first_name or "Пользователь"
@@ -306,7 +305,7 @@ async def process_invoice_payment(message: Message, invoice_id: str):
             f"🔔 Ваш счет на {amount} {coin} оплатил {user_link}!", 
             parse_mode="HTML"
         )
-        logging.info(f"УВЕДОМЛЕНИЕ ОТПРАВЛЕНО создателю {creator_id} (оплата счета)")
+        logging.info(f"УВЕДОМЛЕНИЕ ОТПРАВЛЕНО создателю {creator_id}")
     except Exception as e:
         logging.error(f"ОШИБКА УВЕДОМЛЕНИЯ создателю {creator_id}: {e}")
 
