@@ -2,3 +2,4 @@ aiogram
 aiohttp
 psycopg2-binary
 aiohttp-cors
+Pillow
