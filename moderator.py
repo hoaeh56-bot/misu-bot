@@ -27,7 +27,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres.ptcofqwsvyy
 def get_db():
     return psycopg2.connect(DATABASE_URL)
 
-# Глобальные переменные для отслеживания действий
+# Глобальные переменные для шагов
 pending_action = None
 pending_coin = "USDT"
 
@@ -78,7 +78,7 @@ def generate_check_image(amount, coin, title="Crypto Check"):
     img.save(filepath)
     return filepath
 
-# === СТАРТ (ТОЛЬКО КНОПКИ) ===
+# === СТАРТ ===
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     args = message.text.split()
@@ -135,13 +135,15 @@ async def ask_amount(callback: CallbackQuery):
 async def handle_amount_input(message: Message):
     global pending_action, pending_coin
     amount = float(message.text)
+    
     if pending_action == "check":
         await create_check_logic(message, amount, pending_coin)
     elif pending_action == "invoice":
         await create_invoice_logic(message, amount, pending_coin)
-    pending_action = None
+        
+    pending_action = None # Сбрасываем после создания
 
-# === ЛОГИКА СОЗДАНИЯ ЧЕКА ===
+# === ЛОГИКА СОЗДАНИЯ ЧЕКА (БЕЗ ПАРОЛЯ) ===
 async def create_check_logic(message: Message, amount: float, coin: str):
     if amount <= 0: return await message.answer("Сумма должна быть больше 0")
     
@@ -186,7 +188,7 @@ async def create_invoice_logic(message: Message, amount: float, coin: str):
     await bot.send_photo(chat_id=message.chat.id, photo=photo, caption=caption, reply_markup=kb)
     if os.path.exists(img_path): os.remove(img_path)
 
-# === АКТИВАЦИЯ ЧЕКА С КЛИКАБЕЛЬНЫМ НИКОМ ===
+# === АКТИВАЦИЯ ЧЕКА ===
 async def process_check_activation(message: Message, check_id: str):
     con = get_db(); cur = con.cursor()
     cur.execute("SELECT amount, coin, is_activated, creator_id FROM checks WHERE id = %s", (check_id,))
@@ -205,25 +207,15 @@ async def process_check_activation(message: Message, check_id: str):
     
     await message.answer(f"Вы активировали чек и получили {amount} {coin}!")
     
-    # Уведомление создателю (с кликабельным ником)
     try:
         user_info = await bot.get_chat(message.from_user.id)
         name = user_info.first_name or "Пользователь"
-        if user_info.username:
-            name = f"@{user_info.username}"
-        
-        # Делаем ник кликабельным
+        if user_info.username: name = f"@{user_info.username}"
         user_link = f'<a href="tg://user?id={message.from_user.id}">{name}</a>'
-        
-        await bot.send_message(
-            creator_id, 
-            f"Ваш чек на {amount} {coin} активировал {user_link}!", 
-            parse_mode="HTML"
-        )
-    except Exception as e:
-        logging.error(f"Не удалось отправить уведомление: {e}")
+        await bot.send_message(creator_id, f"Ваш чек на {amount} {coin} активировал {user_link}!", parse_mode="HTML")
+    except: pass
 
-# === ОПЛАТА СЧЕТА С КЛИКАБЕЛЬНЫМ НИКОМ ===
+# === ОПЛАТА СЧЕТА ===
 async def process_invoice_payment(message: Message, invoice_id: str):
     con = get_db(); cur = con.cursor()
     cur.execute("SELECT amount, coin, is_activated, creator_id FROM checks WHERE id = %s", (invoice_id,))
@@ -250,25 +242,15 @@ async def process_invoice_payment(message: Message, invoice_id: str):
     
     await message.answer(f"Вы оплатили счет на {amount} {coin}!")
     
-    # Уведомление создателю (с кликабельным ником)
     try:
         user_info = await bot.get_chat(message.from_user.id)
         name = user_info.first_name or "Пользователь"
-        if user_info.username:
-            name = f"@{user_info.username}"
-        
-        # Делаем ник кликабельным
+        if user_info.username: name = f"@{user_info.username}"
         user_link = f'<a href="tg://user?id={message.from_user.id}">{name}</a>'
-        
-        await bot.send_message(
-            creator_id, 
-            f"Ваш счет на {amount} {coin} оплатил {user_link}!", 
-            parse_mode="HTML"
-        )
-    except Exception as e:
-        logging.error(f"Не удалось отправить уведомление: {e}")
+        await bot.send_message(creator_id, f"Ваш счет на {amount} {coin} оплатил {user_link}!", parse_mode="HTML")
+    except: pass
 
-# === АДМИН ===
+# === АДМИН-ПАНЕЛЬ ===
 @dp.message(F.text == "/admin_panel")
 async def admin_panel(message: Message):
     if message.from_user.id != ADMIN_ID: return
@@ -284,7 +266,7 @@ async def reset_all_balances(callback: CallbackQuery):
     await callback.message.answer("Все балансы обнулены.")
     await callback.answer()
 
-# === ОПЛАТА (STARS) ===
+# === ОПЛАТА STARS ===
 @dp.pre_checkout_query()
 async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery):
     await pre_checkout_query.answer(ok=True)
