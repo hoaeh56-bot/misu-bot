@@ -5,7 +5,7 @@ import psycopg2
 import aiohttp_cors
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart
 from aiogram.types import (
     Message, PreCheckoutQuery, LabeledPrice, InlineKeyboardMarkup,
     InlineKeyboardButton, WebAppInfo, CallbackQuery, FSInputFile
@@ -26,6 +26,10 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres.ptcofqwsvyy
 
 def get_db():
     return psycopg2.connect(DATABASE_URL)
+
+# Глобальные переменные для отслеживания действий
+pending_action = None
+pending_coin = "USDT"
 
 # === ГЕНЕРАЦИЯ КАРТИНКИ ЧЕКА ===
 def generate_check_image(amount, coin, title="Crypto Check"):
@@ -70,11 +74,11 @@ def generate_check_image(amount, coin, title="Crypto Check"):
     draw.text((250, height // 2 + 40), coin, font=font_small, fill="#eeeeee")
     draw.text((80, height - 60), title, font=font_small, fill="#cccccc")
 
-    filepath = f"check_{amount}_{coin}.png"
+    filepath = f"check_{amount}_{coin}_{title}.png"
     img.save(filepath)
     return filepath
 
-# === СТАРТ ===
+# === СТАРТ (ТОЛЬКО КНОПКИ) ===
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     args = message.text.split()
@@ -88,63 +92,61 @@ async def cmd_start(message: Message):
 
     web_app_url = f"https://misu-site.vercel.app/?user_id={message.from_user.id}"
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Open Wallet", web_app=WebAppInfo(url=web_app_url))],
-        [InlineKeyboardButton(text="Создать чек", callback_data="create_check")]
+        [InlineKeyboardButton(text="Открыть кошелек", web_app=WebAppInfo(url=web_app_url))],
+        [InlineKeyboardButton(text="Создать чек", callback_data="create_check_menu")],
+        [InlineKeyboardButton(text="Создать счет", callback_data="create_invoice_menu")]
     ])
-    await message.answer(
-        "Welcome to Crypto Bot.\n\n"
-        "Команды:\n"
-        "/send 100 USDT - чек\n"
-        "/invoice 50 USDT - счет\n"
-        "/balance - баланс",
-        reply_markup=kb
-    )
+    await message.answer("Добро пожаловать в Crypto Bot.\nВыберите действие:", reply_markup=kb)
 
-# === ЧЕКИ ===
-@dp.callback_query(F.data == "create_check")
-async def ask_check_currency(callback: CallbackQuery):
+# === МЕНЮ СОЗДАНИЯ ЧЕКА ===
+@dp.callback_query(F.data == "create_check_menu")
+async def check_currency_menu(callback: CallbackQuery):
+    global pending_action
+    pending_action = "check"
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="USDT", callback_data="check_curr_USDT")],
-        [InlineKeyboardButton(text="GRAM", callback_data="check_curr_GRAM")],
-        [InlineKeyboardButton(text="SOL", callback_data="check_curr_SOL")],
-        [InlineKeyboardButton(text="TRX", callback_data="check_curr_TRX")]
+        [InlineKeyboardButton(text="USDT", callback_data="curr_USDT"), InlineKeyboardButton(text="GRAM", callback_data="curr_GRAM")],
+        [InlineKeyboardButton(text="SOL", callback_data="curr_SOL"), InlineKeyboardButton(text="TRX", callback_data="curr_TRX")]
     ])
-    await callback.message.answer("Выберите валюту для чека:", reply_markup=kb)
+    await callback.message.edit_text("Выберите валюту для чека:", reply_markup=kb)
     await callback.answer()
 
-@dp.callback_query(F.data.startswith("check_curr_"))
-async def ask_check_amount(callback: CallbackQuery):
-    coin = callback.data.replace("check_curr_", "")
-    await callback.message.answer(f"Введите сумму чека в {coin}:")
+# === МЕНЮ СОЗДАНИЯ СЧЕТА ===
+@dp.callback_query(F.data == "create_invoice_menu")
+async def invoice_currency_menu(callback: CallbackQuery):
+    global pending_action
+    pending_action = "invoice"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="USDT", callback_data="curr_USDT"), InlineKeyboardButton(text="GRAM", callback_data="curr_GRAM")],
+        [InlineKeyboardButton(text="SOL", callback_data="curr_SOL"), InlineKeyboardButton(text="TRX", callback_data="curr_TRX")]
+    ])
+    await callback.message.edit_text("Выберите валюту для счета:", reply_markup=kb)
     await callback.answer()
 
+# === ВЫБОР ВАЛЮТЫ ===
+@dp.callback_query(F.data.startswith("curr_"))
+async def ask_amount(callback: CallbackQuery):
+    global pending_coin
+    pending_coin = callback.data.replace("curr_", "")
+    await callback.message.edit_text(f"Введите сумму в {pending_coin}:")
+    await callback.answer()
+
+# === ВВОД СУММЫ ===
 @dp.message(F.text.regexp(r'^\d+(\.\d+)?$'))
-async def handle_check_amount(message: Message):
+async def handle_amount_input(message: Message):
+    global pending_action, pending_coin
     amount = float(message.text)
-    await create_check_logic(message, amount, 'USDT') # По умолчанию USDT
+    if pending_action == "check":
+        await create_check_logic(message, amount, pending_coin)
+    elif pending_action == "invoice":
+        await create_invoice_logic(message, amount, pending_coin)
+    pending_action = None
 
-@dp.message(Command("send"))
-async def cmd_send_check(message: Message):
-    args = message.text.split()
-    if len(args) < 3:
-        return await message.answer("Использование: /send 100 USDT\nВалюты: USDT, GRAM, SOL, TRX")
-    
-    try:
-        amount = float(args[1])
-        coin = args[2].upper()
-        if coin not in ['USDT', 'GRAM', 'SOL', 'TRX']:
-            return await message.answer("Неверная валюта.")
-    except:
-        return await message.answer("Ошибка. Пример: /send 100 USDT")
-    
-    await create_check_logic(message, amount, coin)
-
+# === ЛОГИКА СОЗДАНИЯ ЧЕКА ===
 async def create_check_logic(message: Message, amount: float, coin: str):
     if amount <= 0: return await message.answer("Сумма должна быть больше 0")
     
     balance_field = f"{coin.lower()}_balance"
-    con = get_db()
-    cur = con.cursor()
+    con = get_db(); cur = con.cursor()
     cur.execute(f"SELECT {balance_field} FROM users WHERE user_id = %s", (message.from_user.id,))
     row = cur.fetchone()
     
@@ -153,7 +155,6 @@ async def create_check_logic(message: Message, amount: float, coin: str):
         return await message.answer(f"Недостаточно {coin} на балансе.")
     
     cur.execute(f"UPDATE users SET {balance_field} = {balance_field} - %s WHERE user_id = %s", (amount, message.from_user.id))
-    
     cur.execute("INSERT INTO checks (creator_id, amount, coin, is_activated) VALUES (%s, %s, %s, false) RETURNING id", (message.from_user.id, amount, coin))
     check_id = cur.fetchone()[0]
     con.commit(); cur.close(); con.close()
@@ -167,6 +168,25 @@ async def create_check_logic(message: Message, amount: float, coin: str):
     await bot.send_photo(chat_id=message.chat.id, photo=photo, caption=caption, reply_markup=kb)
     if os.path.exists(img_path): os.remove(img_path)
 
+# === ЛОГИКА СОЗДАНИЯ СЧЕТА ===
+async def create_invoice_logic(message: Message, amount: float, coin: str):
+    if amount <= 0: return await message.answer("Сумма должна быть больше 0")
+    
+    con = get_db(); cur = con.cursor()
+    cur.execute("INSERT INTO checks (creator_id, amount, coin, is_activated) VALUES (%s, %s, %s, false) RETURNING id", (message.from_user.id, amount, coin))
+    invoice_id = cur.fetchone()[0]
+    con.commit(); cur.close(); con.close()
+
+    img_path = generate_check_image(amount, coin, "Payment Invoice")
+    caption = f"Счет на оплату: {amount} {coin}\n\nНажмите кнопку ниже, чтобы оплатить."
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"Оплатить {amount} {coin}", url=f"https://t.me/cryptobot?start=pay_{invoice_id}")]
+    ])
+    photo = FSInputFile(img_path)
+    await bot.send_photo(chat_id=message.chat.id, photo=photo, caption=caption, reply_markup=kb)
+    if os.path.exists(img_path): os.remove(img_path)
+
+# === АКТИВАЦИЯ ЧЕКА С КЛИКАБЕЛЬНЫМ НИКОМ ===
 async def process_check_activation(message: Message, check_id: str):
     con = get_db(); cur = con.cursor()
     cur.execute("SELECT amount, coin, is_activated, creator_id FROM checks WHERE id = %s", (check_id,))
@@ -182,39 +202,28 @@ async def process_check_activation(message: Message, check_id: str):
     cur.execute(f"UPDATE users SET {balance_field} = {balance_field} + %s WHERE user_id = %s", (amount, message.from_user.id))
     cur.execute("UPDATE checks SET is_activated = true, activated_by = %s WHERE id = %s", (message.from_user.id, check_id))
     con.commit(); cur.close(); con.close()
+    
     await message.answer(f"Вы активировали чек и получили {amount} {coin}!")
-
-# === СЧЕТА НА ОПЛАТУ (INVOICE) ===
-@dp.message(Command("invoice"))
-async def cmd_create_invoice(message: Message):
-    args = message.text.split()
-    if len(args) < 3:
-        return await message.answer("Использование: /invoice 50 USDT")
     
+    # Уведомление создателю (с кликабельным ником)
     try:
-        amount = float(args[1])
-        coin = args[2].upper()
-        if coin not in ['USDT', 'GRAM', 'SOL', 'TRX']:
-            return await message.answer("Неверная валюта.")
-    except:
-        return await message.answer("Ошибка. Пример: /invoice 50 USDT")
-    
-    con = get_db(); cur = con.cursor()
-    # Создаем счет
-    cur.execute("INSERT INTO checks (creator_id, amount, coin, is_activated) VALUES (%s, %s, %s, false) RETURNING id", (message.from_user.id, amount, coin))
-    invoice_id = cur.fetchone()[0]
-    con.commit(); cur.close(); con.close()
+        user_info = await bot.get_chat(message.from_user.id)
+        name = user_info.first_name or "Пользователь"
+        if user_info.username:
+            name = f"@{user_info.username}"
+        
+        # Делаем ник кликабельным
+        user_link = f'<a href="tg://user?id={message.from_user.id}">{name}</a>'
+        
+        await bot.send_message(
+            creator_id, 
+            f"Ваш чек на {amount} {coin} активировал {user_link}!", 
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logging.error(f"Не удалось отправить уведомление: {e}")
 
-    img_path = generate_check_image(amount, coin, "Payment Invoice")
-    caption = f"Счет на оплату: {amount} {coin}\n\nНажмите кнопку ниже, чтобы оплатить."
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"Оплатить {amount} {coin}", url=f"https://t.me/cryptobot?start=pay_{invoice_id}")]
-    ])
-    photo = FSInputFile(img_path)
-    await bot.send_photo(chat_id=message.chat.id, photo=photo, caption=caption, reply_markup=kb)
-    if os.path.exists(img_path): os.remove(img_path)
-
-# Обработка оплаты счета
+# === ОПЛАТА СЧЕТА С КЛИКАБЕЛЬНЫМ НИКОМ ===
 async def process_invoice_payment(message: Message, invoice_id: str):
     con = get_db(); cur = con.cursor()
     cur.execute("SELECT amount, coin, is_activated, creator_id FROM checks WHERE id = %s", (invoice_id,))
@@ -234,28 +243,33 @@ async def process_invoice_payment(message: Message, invoice_id: str):
         cur.close(); con.close()
         return await message.answer(f"Недостаточно {coin} для оплаты счета.")
     
-    # Переводим деньги
     cur.execute(f"UPDATE users SET {balance_field} = {balance_field} - %s WHERE user_id = %s", (amount, message.from_user.id))
     cur.execute(f"UPDATE users SET {balance_field} = {balance_field} + %s WHERE user_id = %s", (amount, creator_id))
     cur.execute("UPDATE checks SET is_activated = true, activated_by = %s WHERE id = %s", (message.from_user.id, invoice_id))
     con.commit(); cur.close(); con.close()
     
     await message.answer(f"Вы оплатили счет на {amount} {coin}!")
-    try: await bot.send_message(creator_id, f"Ваш счет на {amount} {coin} был оплачен!")
-    except: pass
-
-# === БАЛАНС ===
-@dp.message(Command("balance"))
-async def cmd_balance(message: Message):
-    con = get_db(); cur = con.cursor()
-    cur.execute("SELECT usdt_balance, gram_balance, sol_balance, trx_balance FROM users WHERE user_id = %s", (message.from_user.id,))
-    row = cur.fetchone()
-    cur.close(); con.close()
-    if not row: return await message.answer("Баланс пуст.")
-    await message.answer(f"Ваш баланс:\nUSDT: {row[0]}\nGRAM: {row[1]}\nSOL: {row[2]}\nTRX: {row[3]}")
+    
+    # Уведомление создателю (с кликабельным ником)
+    try:
+        user_info = await bot.get_chat(message.from_user.id)
+        name = user_info.first_name or "Пользователь"
+        if user_info.username:
+            name = f"@{user_info.username}"
+        
+        # Делаем ник кликабельным
+        user_link = f'<a href="tg://user?id={message.from_user.id}">{name}</a>'
+        
+        await bot.send_message(
+            creator_id, 
+            f"Ваш счет на {amount} {coin} оплатил {user_link}!", 
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logging.error(f"Не удалось отправить уведомление: {e}")
 
 # === АДМИН ===
-@dp.message(Command("admin_panel"))
+@dp.message(F.text == "/admin_panel")
 async def admin_panel(message: Message):
     if message.from_user.id != ADMIN_ID: return
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Обнулить балансы", callback_data="reset_all_balances")]])
