@@ -16,14 +16,22 @@ from aiogram.client.telegram import TelegramAPIServer
 from PIL import Image, ImageDraw, ImageFont
 import config
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
 ADMIN_ID = 1780243396
 
 session = AiohttpSession(api=TelegramAPIServer.from_base(config.API_SERVER))
 bot = Bot(token=config.TOKEN, session=session)
 dp = Dispatcher()
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres.ptcofqwsvyytcnoerazu:22E%23bS%23aMcN%40L6A@aws-0-eu-north-1.pooler.supabase.com:5432/postgres")
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL", 
+    "postgresql://postgres.ptcofqwsvyytcnoerazu:22E%23bS%23aMcN%40L6A@aws-0-eu-north-1.pooler.supabase.com:5432/postgres"
+)
 
 def get_db():
     return psycopg2.connect(DATABASE_URL)
@@ -31,7 +39,7 @@ def get_db():
 pending_action = None
 pending_coin = "USDT"
 
-# === ГЕНЕРАЦИЯ КАРТИНКИ ===
+# === ГЕНЕРАЦИЯ КАРТИНКИ ЧЕКА ===
 def generate_check_image(amount, coin, title="Crypto Check"):
     width, height = 800, 400
     img = Image.new('RGB', (width, height), color='#1e1e1e')
@@ -224,7 +232,7 @@ async def create_invoice_logic(message: Message, amount: float, coin: str):
     await bot.send_photo(chat_id=message.chat.id, photo=photo, caption=caption, reply_markup=kb)
     if os.path.exists(img_path): os.remove(img_path)
 
-# === АКТИВАЦИЯ ЧЕКА ===
+# === АКТИВАЦИЯ ЧЕКА С ЛОГАМИ ===
 async def process_check_activation(message: Message, check_id: str):
     con = get_db(); cur = con.cursor()
     cur.execute("SELECT amount, coin, is_activated, creator_id FROM checks WHERE id = %s", (check_id,))
@@ -243,15 +251,23 @@ async def process_check_activation(message: Message, check_id: str):
     
     await message.answer(f"Вы активировали чек и получили {amount} {coin}!")
     
+    # Уведомление создателю (с логированием)
     try:
         user_info = await bot.get_chat(message.from_user.id)
         name = user_info.first_name or "Пользователь"
         if user_info.username: name = f"@{user_info.username}"
         user_link = f'<a href="tg://user?id={message.from_user.id}">{name}</a>'
-        await bot.send_message(creator_id, f"Ваш чек на {amount} {coin} активировал {user_link}!", parse_mode="HTML")
-    except: pass
+        
+        await bot.send_message(
+            creator_id, 
+            f"🔔 Ваш чек на {amount} {coin} активировал {user_link}!", 
+            parse_mode="HTML"
+        )
+        logging.info(f"УВЕДОМЛЕНИЕ ОТПРАВЛЕНО создателю {creator_id} (активация чека)")
+    except Exception as e:
+        logging.error(f"ОШИБКА УВЕДОМЛЕНИЯ создателю {creator_id}: {e}")
 
-# === ОПЛАТА СЧЕТА ===
+# === ОПЛАТА СЧЕТА С ЛОГАМИ ===
 async def process_invoice_payment(message: Message, invoice_id: str):
     con = get_db(); cur = con.cursor()
     cur.execute("SELECT amount, coin, is_activated, creator_id FROM checks WHERE id = %s", (invoice_id,))
@@ -278,13 +294,21 @@ async def process_invoice_payment(message: Message, invoice_id: str):
     
     await message.answer(f"Вы оплатили счет на {amount} {coin}!")
     
+    # Уведомление создателю (с логированием)
     try:
         user_info = await bot.get_chat(message.from_user.id)
         name = user_info.first_name or "Пользователь"
         if user_info.username: name = f"@{user_info.username}"
         user_link = f'<a href="tg://user?id={message.from_user.id}">{name}</a>'
-        await bot.send_message(creator_id, f"Ваш счет на {amount} {coin} оплатил {user_link}!", parse_mode="HTML")
-    except: pass
+        
+        await bot.send_message(
+            creator_id, 
+            f"🔔 Ваш счет на {amount} {coin} оплатил {user_link}!", 
+            parse_mode="HTML"
+        )
+        logging.info(f"УВЕДОМЛЕНИЕ ОТПРАВЛЕНО создателю {creator_id} (оплата счета)")
+    except Exception as e:
+        logging.error(f"ОШИБКА УВЕДОМЛЕНИЯ создателю {creator_id}: {e}")
 
 # === АДМИН-ПАНЕЛЬ ===
 @dp.message(Command("admin_panel"))
