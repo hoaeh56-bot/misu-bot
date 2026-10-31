@@ -3,14 +3,13 @@ import logging
 import os
 import psycopg2
 import aiohttp_cors
-import hashlib
+import uuid
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.types import (
     Message, PreCheckoutQuery, LabeledPrice, InlineKeyboardMarkup,
-    InlineKeyboardButton, WebAppInfo, CallbackQuery, FSInputFile,
-    InlineQuery, InlineQueryResultArticle, InputTextMessageContent
+    InlineKeyboardButton, WebAppInfo, CallbackQuery, FSInputFile
 )
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
@@ -97,45 +96,46 @@ async def cmd_start(message: Message):
         [InlineKeyboardButton(text="Создать чек", callback_data="create_check_menu")],
         [InlineKeyboardButton(text="Создать счет", callback_data="create_invoice_menu")]
     ])
-    await message.answer("Добро пожаловать в Crypto Bot.\nВыберите действие:", reply_markup=kb)
-
-# === ИНЛАЙН РЕЖИМ (@cryptobot 100) ===
-@dp.inline_query()
-async def inline_check_handler(inline_query: InlineQuery):
-    query = inline_query.query.strip()
-    if not query:
-        return
-    
-    parts = query.split()
-    try:
-        amount = float(parts[0])
-    except:
-        return
-    
-    coin = "USDT"
-    if len(parts) > 1 and parts[1].upper() in ['USDT', 'GRAM', 'SOL', 'TRX']:
-        coin = parts[1].upper()
-
-    # Генерируем уникальный ID
-    check_id = hashlib.md5(f"{inline_query.from_user.id}_{amount}_{coin}_{asyncio.get_event_loop().time()}".encode()).hexdigest()
-
-    # Создаем результат (текст + кнопка)
-    result = InlineQueryResultArticle(
-        id=check_id,
-        title=f"Чек на {amount} {coin}",
-        description="Нажмите, чтобы отправить чек",
-        input_message_content=InputTextMessageContent(
-            message_text=f"Чек на {amount} {coin}\n\nЧтобы активировать, нажмите кнопку ниже."
-        ),
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=f"Получить {amount} {coin}",
-                url=f"https://t.me/cryptobot?start=check_inline_{inline_query.from_user.id}_{amount}_{coin}"
-            )]
-        ])
+    await message.answer(
+        "Добро пожаловать в Crypto Bot.\nВыберите действие:\n\n"
+        "В чатах используйте:\n"
+        "/send 10 TRX - создать чек\n"
+        "/invoice 50 USDT - создать счет",
+        reply_markup=kb
     )
 
-    await inline_query.answer([result], cache_time=1)
+# === КОМАНДЫ ДЛЯ ЧАТОВ ===
+@dp.message(Command("send"))
+async def cmd_send_in_chat(message: Message):
+    args = message.text.split()
+    if len(args) < 3:
+        return await message.answer("Использование: /send 10 TRX\nДоступные валюты: USDT, GRAM, SOL, TRX")
+    
+    try:
+        amount = float(args[1])
+        coin = args[2].upper()
+        if coin not in ['USDT', 'GRAM', 'SOL', 'TRX']:
+            return await message.answer("Неверная валюта. Доступны: USDT, GRAM, SOL, TRX")
+    except:
+        return await message.answer("Ошибка. Пример: /send 10 TRX")
+    
+    await create_check_logic(message, amount, coin)
+
+@dp.message(Command("invoice"))
+async def cmd_invoice_in_chat(message: Message):
+    args = message.text.split()
+    if len(args) < 3:
+        return await message.answer("Использование: /invoice 50 USDT\nДоступные валюты: USDT, GRAM, SOL, TRX")
+    
+    try:
+        amount = float(args[1])
+        coin = args[2].upper()
+        if coin not in ['USDT', 'GRAM', 'SOL', 'TRX']:
+            return await message.answer("Неверная валюта. Доступны: USDT, GRAM, SOL, TRX")
+    except:
+        return await message.answer("Ошибка. Пример: /invoice 50 USDT")
+    
+    await create_invoice_logic(message, amount, coin)
 
 # === МЕНЮ КНОПОК ===
 @dp.callback_query(F.data == "create_check_menu")
@@ -287,7 +287,7 @@ async def process_invoice_payment(message: Message, invoice_id: str):
     except: pass
 
 # === АДМИН-ПАНЕЛЬ ===
-@dp.message(F.text == "/admin_panel")
+@dp.message(Command("admin_panel"))
 async def admin_panel(message: Message):
     if message.from_user.id != ADMIN_ID: return
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Обнулить балансы", callback_data="reset_all_balances")]])
