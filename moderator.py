@@ -1,70 +1,57 @@
 # moderator.py
 import asyncio
 import logging
-import aiosqlite
+import asyncpg
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 from aiogram.filters import CommandStart
-from aiogram.types import Message
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
 import config
 from relationship import router as relationship_router
 
-# Подключение к API Мисуграма строго по докам
+# Подключение к API Мисуграма
 session = AiohttpSession(api=TelegramAPIServer.from_base(config.API_SERVER))
-
 bot = Bot(token=config.BOT_TOKEN, session=session)
 dp = Dispatcher()
 
-# --- ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ---
-async def init_db():
-    async with aiosqlite.connect(config.DB_PATH) as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                username TEXT,
-                gender TEXT
-            )
-        """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS couples (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER,
-                user1_id INTEGER,
-                user2_id INTEGER,
-                sparks INTEGER DEFAULT 100,
-                level INTEGER DEFAULT 1,
-                is_premium BOOLEAN DEFAULT 0,
-                status TEXT DEFAULT 'ACTIVE',
-                offended_by INTEGER DEFAULT NULL
-            )
-        """)
-        await db.commit()
-
 # --- ХЕНДЛЕР СТАРТА ---
 @dp.message(CommandStart())
-async def cmd_start(message: Message):
-    async with aiosqlite.connect(config.DB_PATH) as db:
-        await db.execute(
-            "INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)",
-            (message.from_user.id, message.from_user.username)
-        )
-        await db.commit()
+async def cmd_start(message: Message, db: asyncpg.Pool):
+    await db.execute(
+        "INSERT INTO users (user_id, username) VALUES ($1, $2) ON CONFLICT (user_id) DO NOTHING",
+        message.from_user.id, message.from_user.username
+    )
+
+    # Кнопка с твоим юзернеймом
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Добавить в группу", url="https://t.me/celestianabot?startgroup=true")]
+    ])
 
     await message.answer(
-        "Привет! Бот отношений запущен.\n"
-        "Для начала укажи свой пол: `.мойпол м` или `.мойпол ж`"
+        "Привет, я Селестиана! 💖\n"
+        "Я помогаю строить отношения в чатах.\n"
+        "Добавь меня в группу и напиши `.мойпол м` или `.мойпол ж`, чтобы начать.",
+        reply_markup=kb
     )
 
 # --- ЗАПУСК ---
 async def main():
     logging.basicConfig(level=logging.INFO)
-    await init_db()
     
+    # Подключение к Supabase
+    try:
+        pool = await asyncpg.create_pool(config.DATABASE_URL)
+        logging.info("Успешное подключение к базе Supabase!")
+    except Exception as e:
+        logging.error(f"ОШИБКА ПОДКЛЮЧЕНИЯ К БАЗЕ: {e}")
+        return
+
     dp.include_router(relationship_router)
+    dp["db"] = pool
     
-    logging.info("Бот Мисуграма запущен. База данных готова.")
+    logging.info("Бот Мисуграма запущен.")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
