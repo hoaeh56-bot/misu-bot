@@ -1,4 +1,8 @@
-import os
+# config.py
+BOT_TOKEN = "1780243507:9JWtE-_fbhSg76VloMBkLkLKe5BMIco3NeW"
 
-TOKEN = "1780243430:1S_dZJDKmp1UldGOdrlyTEwpvMohwwn0QY5"
-API_SERVER = "https://misugram.cloud-ip.cc"
+# Базовый URL Мисуграма из документации
+API_SERVER = "https://misugram.cloud-ip.cc" 
+
+# Название файла базы данных
+DB_PATH = "celestiana_bot.db"
