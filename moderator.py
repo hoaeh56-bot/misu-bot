@@ -24,7 +24,6 @@ async def cmd_start(message: Message, db: asyncpg.Pool):
         message.from_user.id, message.from_user.username
     )
 
-    # Кнопка с твоим юзернеймом
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Добавить в группу", url="https://t.me/celestianabot?startgroup=true")]
     ])
@@ -40,7 +39,14 @@ async def cmd_start(message: Message, db: asyncpg.Pool):
 async def main():
     logging.basicConfig(level=logging.INFO)
     
-    # Подключение к Supabase
+    # Сброс вебхука (обязательно, чтобы не было конфликтов)
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        logging.info("Вебхуки сброшены.")
+    except Exception as e:
+        logging.error(f"Ошибка сброса вебхука: {e}")
+
+    # Подключение к базе
     try:
         pool = await asyncpg.create_pool(config.DATABASE_URL)
         logging.info("Успешное подключение к базе Supabase!")
